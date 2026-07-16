@@ -414,8 +414,8 @@ class Utilities:
         settings = DatabaseManager.get_settings()
         name = settings.get('bot_name', 'Hosting Bot')
         return (f"┌─⊷『 {title} 』\n│\n├ {content}\n│\n└─⊷ <b>{name}</b>\n"
-                f"<code>RED MOOD t.me/REDM00D</code>\n"
-                f"<code>channel t.me/PRO_APK_MOOD</code>\n{HIDDEN_LONG}")
+                f"<code> REDM00D </code>\n"
+                f"<code>channel t.me/PRO_APK_MOOD </code>\n{HIDDEN_LONG}")
 
     @staticmethod
     def delete_last_message(chat_id):
@@ -934,7 +934,14 @@ TRANSLATIONS = {
 
 def init_database():
     default_channels = [
-        {"username": "@PRO_APK_MOOD", "name": "PRO_APK_MOOD"}
+        {"username": "@F7_7G", "name": "F7_7G"},
+        {"username": "@H_U_VB", "name": "H_U_VB"},
+        {"username": "@seed_1k", "name": "seed_1k"},
+        {"username": "@TERBO_CODE", "name": "TERBO_CODE"},
+        {"username": "@BQBOOB1", "name": "BQBOOB1"},
+        {"username": "@bshshshkk", "name": "bshshshkk"},
+        {"username": "@EQJ_1", "name": "EQJ_1"},
+        {"username": "@HAMO_X_OT3", "name": "HAMO_X_OT3"}
     ]
     settings = DatabaseManager.get_settings()
     if 'channels' not in settings:
@@ -2826,8 +2833,8 @@ threading.Thread(target=monitoring_loop, daemon=True).start()
 init_database()
 
 print("=" * 40)
-print("Hosting Bot | REDMOOD t.me/REDM00D")
-print("channel t.me/PRO_APK_MOOD")
+print("Hosting Bot | White Wolf t.me/j49_c")
+print("channel t.me/bshshshkk")
 print("=" * 40)
 
 while True:
