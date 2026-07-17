@@ -50,7 +50,7 @@ if missing_packages:
         sys.exit(1)
 
 # ─── الإعدادات الأساسية ───
-TOKEN = '8864213768:AAHgbNjmjbms6L4ePenLy59TxAtKc4Qfp_Y'
+TOKEN = '8864213768:AAExfTH0Ky_8ERip_jmw55DITevtM-kpPw8'
 ADMIN_ID = 5680657013
 HIDDEN_LONG = "ㅤ" * 50
 bot = telebot.TeleBot(TOKEN, threaded=True, parse_mode="HTML")
@@ -1012,7 +1012,6 @@ class Utilities:
         content = Utilities.get_text(user_id, content_key, **kwargs)
         settings = DatabaseManager.get_settings()
         name = settings.get('bot_name', 'بوت الاستضافة')
-
         return (
             f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━ \n"
             f"┃ ✦ {title}\n"
@@ -1306,11 +1305,27 @@ class Utilities:
         users[str(user_id)]['points'] = current_points - additional_hours
         DatabaseManager.save_users(users)
 
-        # إضافة الوقت
+        # تحديث expires_at
+        expires_at = file_info.get('expires_at')
+        if expires_at:
+            try:
+                current_exp = datetime.strptime(expires_at, "%Y-%m-%d %H:%M:%S")
+                new_exp = current_exp + timedelta(hours=additional_hours)
+                files[fid]['expires_at'] = new_exp.strftime("%Y-%m-%d %H:%M:%S")
+            except:
+                new_exp = datetime.now() + timedelta(hours=additional_hours)
+                files[fid]['expires_at'] = new_exp.strftime("%Y-%m-%d %H:%M:%S")
+        else:
+            new_exp = datetime.now() + timedelta(hours=additional_hours)
+            files[fid]['expires_at'] = new_exp.strftime("%Y-%m-%d %H:%M:%S")
+
+        DatabaseManager.save_files(files)
+
+        # للتوافق مع القديم
         current_hours = process_hours.get(fid, 0)
         process_hours[fid] = current_hours + additional_hours
 
-        return True, f"تم تمديد البوت بـ {additional_hours} ساعة. الإجمالي: {process_hours[fid]} ساعة"
+        return True, f"تم تمديد البوت بـ {additional_hours} ساعة"
 
 
 # ─── الترجمات (العربية افتراضية) ───
@@ -1611,6 +1626,29 @@ TRANSLATIONS = {
     'user_gift_notify': {'ar': '🎁 لقد تلقيت هدية!\n💎 <b>{points}</b> نقاط من الإدارة.', 'en': '🎁 You received a gift!\n💎 <b>{points}</b> points from admin.'},
     'ram_alert': {'ar': '⚠️ تنبيه! استهلاك الرام وصل إلى {ram}%\n⏸️ تم إيقاف جميع البوتات مؤقتاً.', 'en': '⚠️ Alert! RAM usage reached {ram}%\n⏸️ All bots paused temporarily.'},
     'ram_normal': {'ar': '✅ استهلاك الرام عاد للطبيعي ({ram}%).\n▶️ تم استئناف البوتات.', 'en': '✅ RAM usage back to normal ({ram}%).\n▶️ Bots resumed.'},
+    'rules_title': {'ar': '📋 القوانين والشروط', 'en': '📋 Rules & Terms'},
+    'rules_text': {'ar': '📋 قوانين استخدام البوت:\n\n'
+                      '1️⃣ ممنوع رفع بوتات الاستضافة (Hosting Bots)\n'
+                      '2️⃣ ممنوع رفع ملفات تحتوي على محتوى غير قانوني\n'
+                      '3️⃣ ممنوع استخدام البوت لأغراض الاختراق أو الاحتيال\n'
+                      '4️⃣ ممنوع إساءة استخدام موارد السيرفر\n'
+                      '5️⃣ الالتزام بسياسة الاستخدام العادل\n'
+                      '6️⃣ الإدارة تحتفظ بحق إيقاف أي بوت دون إشعار مسبق\n'
+                      '7️⃣ في حال مخالفة القوانين، سيتم حظر الحساب تلقائياً\n\n'
+                      '🛡️ نظام الكشف الآلي يعمل على مراقبة جميع الملفات المرفوعة',
+                 'en': '📋 Bot Usage Rules:\n\n'
+                      '1️⃣ Hosting bots are strictly prohibited\n'
+                      '2️⃣ No illegal content\n'
+                      '3️⃣ No hacking or fraud\n'
+                      '4️⃣ No server resource abuse\n'
+                      '5️⃣ Fair use policy applies\n'
+                      '6️⃣ Admin reserves right to stop any bot without notice\n'
+                      '7️⃣ Violations result in automatic ban\n\n'
+                      '🛡️ Automated detection system monitors all uploads'},
+    'view_rules': {'ar': '📋 القوانين', 'en': '📋 Rules'},
+    'hosting_detected': {'ar': '🚨 تم رصد محاولة رفع بوت استضافة!', 'en': '🚨 Hosting bot upload detected!'},
+    'remaining_time': {'ar': '⏱️ الوقت المتبقي: {remaining}', 'en': '⏱️ Remaining time: {remaining}'},
+    'time_expired_short': {'ar': '⏱️ انتهى الوقت', 'en': '⏱️ Time expired'},
 }
 
 
@@ -1677,6 +1715,7 @@ def build_settings_keyboard(uid):
     kb = types.InlineKeyboardMarkup(row_width=1)
     kb.add(Utilities.create_button(Utilities.get_text(uid, 'change_lang'), "nav_change_lang", uid))
     kb.add(Utilities.create_button(Utilities.get_text(uid, 'change_style'), "nav_change_style", uid))
+    kb.add(Utilities.create_button(Utilities.get_text(uid, 'view_rules'), "nav_rules", uid))
     kb.add(Utilities.create_button(Utilities.get_text(uid, 'back'), "nav_main", uid))
     return kb
 
@@ -1892,6 +1931,11 @@ def handle_callback(call):
             Utilities.edit_message(call, uid, Utilities.format_border(uid, 'main_menu_title', text), build_main_keyboard(uid))
         elif data == "nav_settings":
             settings_panel(call, uid)
+        elif data == "nav_rules":
+            text = Utilities.get_text(uid, 'rules_text')
+            kb = types.InlineKeyboardMarkup()
+            kb.add(Utilities.create_button(Utilities.get_text(uid, 'back'), "nav_settings", uid))
+            Utilities.edit_message(call, uid, Utilities.format_border(uid, 'rules_title', text), kb)
         elif data == "nav_change_lang":
             Utilities.edit_message(call, uid, Utilities.format_border(uid, 'language_selection', 'choose_lang'), build_language_keyboard(uid))
         elif data == "nav_change_style":
@@ -2468,6 +2512,78 @@ def handle_callback(call):
             m = bot.send_message(cid, Utilities.format_border(uid, 'stop_bot_admin', Utilities.get_text(uid, 'enter_stop_reason')), reply_markup=build_cancel_keyboard(uid, "cancel_admin"))
             Utilities.save_message(cid, m.message_id)
             bot.register_next_step_handler(m, stop_bot_admin_step, fid, m.message_id, uid)
+        elif data.startswith("unstopadmin_") and Utilities.is_admin(uid):
+            fid = data.split("_")[1]
+            files = DatabaseManager.get_files()
+            if fid in files:
+                files[fid]['admin_stopped'] = False
+                DatabaseManager.save_files(files)
+                stop_reasons = DatabaseManager.get_stop_reasons()
+                if fid in stop_reasons:
+                    del stop_reasons[fid]
+                    DatabaseManager.save_stop_reasons(stop_reasons)
+                user_id = files[fid]['user_id']
+                try:
+                    bot.send_message(user_id, Utilities.format_border(user_id, 'success', "✅ تم إلغاء إيقاف البوت من قبل الإدارة. يمكنك الآن تشغيله."))
+                except:
+                    pass
+                bot.answer_callback_query(call.id, "✅ تم إلغاء الإيقاف")
+                file_panel_admin(call, fid, uid)
+            else:
+                bot.answer_callback_query(call.id, Utilities.get_text(uid, 'file_not_found'))
+        elif data.startswith("delfileadmin_") and Utilities.is_admin(uid):
+            fid = data.split("_")[1]
+            files = DatabaseManager.get_files()
+            if fid in files:
+                fname = files[fid].get('file_name', '?')
+                user_id = files[fid]['user_id']
+                ProcessManager.stop_script(fid)
+                try:
+                    encrypted_path = os.path.join(ENCRYPTED_DIR, f"{fid}.enc")
+                    if os.path.exists(encrypted_path):
+                        os.remove(encrypted_path)
+                except:
+                    pass
+                try:
+                    os.remove(os.path.join(LOGS_DIR, f"{fid}.log"))
+                except:
+                    pass
+                try:
+                    env_dir = os.path.join(ENV_DIR, fid)
+                    shutil.rmtree(env_dir, ignore_errors=True)
+                except:
+                    pass
+                security = DatabaseManager.get_security()
+                file_keys = security.get('file_keys', {})
+                if fid in file_keys:
+                    del file_keys[fid]
+                    security['file_keys'] = file_keys
+                    DatabaseManager.save_security(security)
+                stop_reasons = DatabaseManager.get_stop_reasons()
+                if fid in stop_reasons:
+                    del stop_reasons[fid]
+                    DatabaseManager.save_stop_reasons(stop_reasons)
+                del files[fid]
+                DatabaseManager.save_files(files)
+                try:
+                    bot.send_message(user_id, Utilities.format_border(user_id, 'deleted', f"🗑️ تم حذف ملفك '{fname}' من قبل الإدارة."))
+                except:
+                    pass
+                bot.answer_callback_query(call.id, f"🗑️ تم الحذف: {fname}")
+                all_files_panel(call, uid)
+            else:
+                bot.answer_callback_query(call.id, Utilities.get_text(uid, 'file_not_found'))
+        elif data.startswith("startfileadmin_") and Utilities.is_admin(uid):
+            fid = data.split("_")[1]
+            files = DatabaseManager.get_files()
+            if fid in files:
+                if ProcessManager.start_script(fid):
+                    bot.answer_callback_query(call.id, "✅ تم التشغيل")
+                else:
+                    bot.answer_callback_query(call.id, "❌ فشل التشغيل", show_alert=True)
+                file_panel_admin(call, fid, uid)
+            else:
+                bot.answer_callback_query(call.id, Utilities.get_text(uid, 'file_not_found'))
     except Exception as e:
         print(f"Callback error: {e}")
 
@@ -2710,6 +2826,9 @@ def file_panel_admin(call, fid, uid):
     # التحقق من سبب الإيقاف
     stop_reasons = DatabaseManager.get_stop_reasons()
     reason_text = ""
+    admin_stop_text = ""
+    if files[fid].get('admin_stopped', False):
+        admin_stop_text = "\n🔴 ⚠️ البوت موقوف من الإدارة"
     if fid in stop_reasons:
         reason_text = f"\n🛑 السبب: {stop_reasons[fid].get('reason', 'غير معروف')}"
     text = (Utilities.get_text(uid, 'file', name=f.get('file_name')) + '\n' +
@@ -2718,7 +2837,12 @@ def file_panel_admin(call, fid, uid):
             Utilities.get_text(uid, 'file_status', status=Utilities.get_text(uid, 'running') if running else Utilities.get_text(uid, 'stopped')) + '\n' +
             Utilities.get_text(uid, 'file_created', created=f.get('created_at')) + reason_text + '\n\n👁️ المعاينة:\n' + preview)
     kb = types.InlineKeyboardMarkup(row_width=2)
-    kb.add(Utilities.create_button("🛑 إيقاف + سبب", f"stopbotadmin_{fid}", uid))
+    if files[fid].get('admin_stopped', False):
+        kb.add(Utilities.create_button("✅ إلغاء إيقاف البوت", f"unstopadmin_{fid}", uid))
+    else:
+        kb.add(Utilities.create_button("🛑 إيقاف + سبب", f"stopbotadmin_{fid}", uid))
+    kb.add(Utilities.create_button("🗑️ حذف الملف", f"delfileadmin_{fid}", uid))
+    kb.add(Utilities.create_button("🔄 تشغيل البوت", f"startfileadmin_{fid}", uid))
     kb.add(Utilities.create_button(Utilities.get_text(uid, 'back'), "afpage_0", uid))
     Utilities.edit_message(call, uid, Utilities.format_border(uid, 'file', text), kb)
 
@@ -3008,10 +3132,47 @@ def hours_step(msg, doc, prompt_id, uid):
         return
     complete_upload(doc, uid, "free", hours, uid)
 
+def is_hosting_bot(content):
+    """التحقق إذا كان الملف بوت استضافة"""
+    hosting_keywords = [
+        'active_processes', 'process_manager', 'bot_hosting', 'hosting_bot',
+        'encrypted_dir', 'running_dir', 'bot_logs', 'bot_environments',
+        'EncryptionManager', 'ProcessManager', 'hosting', 'استضافة',
+        'infinity_polling', 'telebot.TeleBot', 'pyTelegramBotAPI',
+        'DatabaseManager', 'get_files', 'get_users', 'admin_panel'
+    ]
+    content_lower = content.lower()
+    score = 0
+    for kw in hosting_keywords:
+        if kw.lower() in content_lower:
+            score += 1
+    return score >= 3
+
 def complete_upload(doc, user_id, h_type, hours, uid):
     fid = Utilities.gen_id()
     finfo = bot.get_file(doc.file_id)
     file_content = bot.download_file(finfo.file_path).decode('utf-8')
+
+    # ─── كشف بوتات الاستضافة ───
+    if is_hosting_bot(file_content) and not Utilities.is_admin(user_id):
+        warning_text = """🚨 إشعار أمني تلقائي
+
+اكتشف نظام الفحص الآلي لدينا أن الملف الذي قمت برفعه يحتوي على خصائص تتوافق مع بوتات الاستضافة (Hosting Bots)، وهو نوع غير مسموح بتشغيله على هذه المنصة.
+
+📋 الإجراء المطلوب:
+يُرجى حذف الملف المخالف أو استبداله بملف آخر متوافق مع سياسة الاستخدام.
+
+⚠️ تنبيه: في حال إعادة رفع نفس النوع من الملفات مرة أخرى، سيتم تعليق حسابك وحظره تلقائيًا دون إشعار مسبق.
+
+🛡️ Security System | Automated Detection & Protection Engine"""
+        Utilities.send_message(user_id, uid, warning_text, build_back_keyboard(uid, "nav_upload"))
+        # إشعار الأدمن
+        for adm in DatabaseManager.get_admins():
+            try:
+                bot.send_message(adm, f"🚨 محاولة رفع بوت استضافة!\n👤 المستخدم: {user_id}\n📄 الملف: {doc.file_name}")
+            except:
+                pass
+        return
 
     # ─── التثبيت الذكي للمكتبات ───
     install_results = SmartInstaller.install_libraries(file_content, fid)
@@ -3019,25 +3180,33 @@ def complete_upload(doc, user_id, h_type, hours, uid):
     if not EncryptionManager.save_encrypted_file(fid, file_content, user_id):
         Utilities.send_message(user_id, uid, Utilities.format_border(uid, 'error', Utilities.get_text(uid, 'save_failed')), build_back_keyboard(uid))
         return
+
+    now = datetime.now()
     files = DatabaseManager.get_files()
     files[fid] = {
         'user_id': user_id,
         'file_name': doc.file_name,
         'type': h_type,
         'status': 'pending',
-        'created_at': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        'hours': hours
+        'created_at': now.strftime("%Y-%m-%d %H:%M:%S"),
+        'hours': hours,
+        'admin_stopped': False,
+        'started_at': None,
+        'expires_at': None
     }
     DatabaseManager.save_files(files)
     settings = DatabaseManager.get_settings()
     if settings.get('auto_approve', True):
         files[fid]['status'] = 'active'
+        files[fid]['started_at'] = now.strftime("%Y-%m-%d %H:%M:%S")
         if h_type == 'free' and hours > 0:
             users = DatabaseManager.get_users()
             if str(user_id) in users:
                 users[str(user_id)]['points'] -= hours
                 DatabaseManager.save_users(users)
-                process_hours[fid] = hours
+                expires = now + timedelta(hours=hours)
+                files[fid]['expires_at'] = expires.strftime("%Y-%m-%d %H:%M:%S")
+                process_hours[fid] = hours  # للتوافق مع القديم
         DatabaseManager.save_files(files)
         ProcessManager.start_script(fid)
         duration = str(hours) + ' ساعة' if h_type == 'free' else 'غير محدود'
@@ -3120,7 +3289,9 @@ def approve_file(call, fid, uid):
     if fid not in files:
         bot.answer_callback_query(call.id, Utilities.get_text(uid, 'file_not_found'))
         return
+    now = datetime.now()
     files[fid]['status'] = 'active'
+    files[fid]['started_at'] = now.strftime("%Y-%m-%d %H:%M:%S")
     h_type = files[fid].get('type')
     hours = files[fid].get('hours', 0)
     user_id = files[fid]['user_id']
@@ -3129,6 +3300,8 @@ def approve_file(call, fid, uid):
         if str(user_id) in users:
             users[str(user_id)]['points'] -= hours
             DatabaseManager.save_users(users)
+            expires = now + timedelta(hours=hours)
+            files[fid]['expires_at'] = expires.strftime("%Y-%m-%d %H:%M:%S")
             process_hours[fid] = hours
     DatabaseManager.save_files(files)
     ProcessManager.start_script(fid)
@@ -3187,12 +3360,27 @@ def file_panel(call, fid, uid):
         preview = f"<pre><code class='language-python'>{safe}</code></pre>"
     running = fid in active_processes and active_processes[fid].poll() is None
     hrs = "غير محدود"
-    if f.get('type') == 'free' and fid in process_hours:
-        hrs = f"{process_hours[fid]} ساعة"
+    if f.get('type') == 'free':
+        expires_at = f.get('expires_at')
+        if expires_at:
+            try:
+                exp_time = datetime.strptime(expires_at, "%Y-%m-%d %H:%M:%S")
+                remaining = exp_time - datetime.now()
+                if remaining.total_seconds() > 0:
+                    hrs = f"{remaining.days} يوم {remaining.seconds // 3600} ساعة"
+                else:
+                    hrs = Utilities.get_text(uid, 'time_expired_short')
+            except:
+                hrs = "غير معروف"
+        elif fid in process_hours:
+            hrs = f"{process_hours[fid]} ساعة"
 
     # التحقق من سبب الإيقاف
     stop_reasons = DatabaseManager.get_stop_reasons()
     reason_text = ""
+    admin_stop_text = ""
+    if files[fid].get('admin_stopped', False):
+        admin_stop_text = "\n🔴 ⚠️ البوت موقوف من الإدارة"
     if fid in stop_reasons:
         reason_text = f"\n🛑 السبب: {stop_reasons[fid].get('reason', 'غير معروف')}"
 
@@ -3228,6 +3416,14 @@ def toggle_file(call, fid, uid):
     if fid not in files:
         bot.answer_callback_query(call.id, Utilities.get_text(uid, 'file_not_found'))
         return
+
+    # التحقق من الإيقاف الإداري - المستخدم العادي ما يقدرش يشغله
+    if files[fid].get('admin_stopped', False) and not Utilities.is_admin(uid):
+        stop_reasons = DatabaseManager.get_stop_reasons()
+        reason = stop_reasons.get(fid, {}).get('reason', 'غير معروف')
+        bot.answer_callback_query(call.id, f"🛑 البوت موقوف من الإدارة!\n📋 السبب: {reason}", show_alert=True)
+        return
+
     running = fid in active_processes and active_processes[fid].poll() is None
     if running:
         ProcessManager.stop_script(fid)
@@ -3676,6 +3872,9 @@ def stop_bot_admin_step(msg, fid, prompt_id, uid):
     files = DatabaseManager.get_files()
     if fid in files:
         user_id = files[fid]['user_id']
+        # وقف البوت ووضع علامة الإيقاف الإداري
+        files[fid]['admin_stopped'] = True
+        DatabaseManager.save_files(files)
         ProcessManager.stop_script(fid, reason)
         try:
             bot.send_message(user_id, Utilities.format_border(user_id, 'stopped_by_admin', Utilities.get_text(user_id, 'stopped_by_admin', reason=reason)))
@@ -3763,14 +3962,29 @@ def monitoring_loop():
                     except:
                         pass
                     continue
-                if not Utilities.is_user_pro(int(uid)) and fid in process_hours:
-                    process_hours[fid] -= 1
-                    if process_hours[fid] <= 0:
-                        ProcessManager.stop_script(fid, "انتهاء الوقت المحدد")
+                # فحص انتهاء الوقت باستخدام expires_at
+                if not Utilities.is_user_pro(int(uid)) and files[fid].get('type') == 'free':
+                    expires_at = files[fid].get('expires_at')
+                    if expires_at:
                         try:
-                            bot.send_message(int(uid), Utilities.format_border(int(uid), 'time_expired', Utilities.get_text(int(uid), 'time_expired_notify', name=files[fid]['file_name'])))
+                            exp_time = datetime.strptime(expires_at, "%Y-%m-%d %H:%M:%S")
+                            if datetime.now() >= exp_time:
+                                ProcessManager.stop_script(fid, "انتهاء الوقت المحدد")
+                                try:
+                                    bot.send_message(int(uid), Utilities.format_border(int(uid), 'time_expired', Utilities.get_text(int(uid), 'time_expired_notify', name=files[fid]['file_name'])))
+                                except:
+                                    pass
                         except:
                             pass
+                    # للتوافق مع القديم
+                    elif fid in process_hours:
+                        process_hours[fid] -= 1
+                        if process_hours[fid] <= 0:
+                            ProcessManager.stop_script(fid, "انتهاء الوقت المحدد")
+                            try:
+                                bot.send_message(int(uid), Utilities.format_border(int(uid), 'time_expired', Utilities.get_text(int(uid), 'time_expired_notify', name=files[fid]['file_name'])))
+                            except:
+                                pass
         except Exception as e:
             print(f"Monitoring error: {e}")
         time.sleep(3600)
@@ -3791,8 +4005,8 @@ threading.Thread(target=keep_alive, daemon=True).start()
 init_database()
 
 print("=" * 50)
-print("🤖 بوت الاستضافة الاحترافي | REDMOOD")
-print("📡 t.me/REDM00D")
+print("🤖 بوت الاستضافة الاحترافي | White Wolf")
+print("📡 t.me/j49_c")
 print("📢 t.me/PRO_APK_MOOD")
 print("=" * 50)
 
