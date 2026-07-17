@@ -15,6 +15,9 @@ import base64
 import shutil
 import psutil
 import resource
+import ast
+import importlib
+import pkgutil
 from telebot import types
 from datetime import datetime, timedelta
 from html import escape
@@ -22,6 +25,7 @@ from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad, unpad
 from Crypto.Random import get_random_bytes
 
+# ─── التحقق من المكتبات المطلوبة ───
 required_modules = {
     'telebot': 'pyTelegramBotAPI',
     'requests': 'requests',
@@ -36,16 +40,17 @@ for module, package in required_modules.items():
         missing_packages.append(package)
 
 if missing_packages:
-    print(f"Installing missing packages: {missing_packages}")
+    print(f"جاري تثبيت المكتبات المفقودة: {missing_packages}")
     try:
         subprocess.check_call([sys.executable, "-m", "pip", "install"] + missing_packages)
-        print("Installation successful. Please restart the script.")
+        print("تم التثبيت بنجاح. يرجى إعادة تشغيل السكربت.")
         sys.exit(0)
     except subprocess.CalledProcessError as e:
-        print(f"Installation failed: {e}")
+        print(f"فشل التثبيت: {e}")
         sys.exit(1)
 
-TOKEN = '8864213768:AAHgbNjmjbms6L4ePenLy59TxAtKc4Qfp_Y'
+# ─── الإعدادات الأساسية ───
+TOKEN = '6858517910:AAGQ3WoJy1hGPls_cn1IDmd9rV7o8KXn_eM'
 ADMIN_ID = 5680657013
 HIDDEN_LONG = "ㅤ" * 50
 bot = telebot.TeleBot(TOKEN, threaded=True, parse_mode="HTML")
@@ -61,8 +66,10 @@ MARKET_DIR = os.path.join(BASE_DIR, 'market')
 ENV_DIR = os.path.join(BASE_DIR, 'bot_environments')
 ENCRYPTED_DIR = os.path.join(BASE_DIR, 'encrypted_files')
 TEMP_DIR = os.path.join(BASE_DIR, 'temp')
+GIFTS_DIR = os.path.join(BASE_DIR, 'gifts')
 
-for d in [RUNNING_DIR, LOGS_DIR, DB_DIR, ASSETS_DIR, STORE_DIR, THUMBS_DIR, MARKET_DIR, ENV_DIR, ENCRYPTED_DIR, TEMP_DIR]:
+for d in [RUNNING_DIR, LOGS_DIR, DB_DIR, ASSETS_DIR, STORE_DIR, THUMBS_DIR, 
+          MARKET_DIR, ENV_DIR, ENCRYPTED_DIR, TEMP_DIR, GIFTS_DIR]:
     if not os.path.exists(d):
         os.makedirs(d)
 
@@ -73,7 +80,11 @@ STORE_DB = os.path.join(DB_DIR, 'store.json')
 ADMINS_DB = os.path.join(DB_DIR, 'admins.json')
 MARKET_DB = os.path.join(DB_DIR, 'market.json')
 SECURITY_DB = os.path.join(DB_DIR, 'security.json')
+GIFTS_DB = os.path.join(DB_DIR, 'gifts.json')
+STOP_REASONS_DB = os.path.join(DB_DIR, 'stop_reasons.json')
+INSTALLED_LIBS_DB = os.path.join(DB_DIR, 'installed_libs.json')
 
+# ─── القفل والمتغيرات العامة ───
 db_lock = threading.Lock()
 cancel_states = {}
 last_bot_messages = {}
@@ -81,15 +92,19 @@ active_processes = {}
 process_hours = {}
 user_notifications = {}
 process_resources = {}
+paused_bots = set()  # بوتات متوقفة مؤقتاً بسبب ضغط السيرفر
 
 RESOURCE_LIMITS = {
     'max_cpu_percent': 80,
     'max_memory_mb': 256,
     'max_disk_usage_mb': 100,
     'max_processes': 20,
-    'max_log_size_mb': 5
+    'max_log_size_mb': 5,
+    'ram_pause_threshold': 90,   # نسبة الرام للتوقف
+    'ram_resume_threshold': 80   # نسبة الرام للاستئناف
 }
 
+# ─── دوال قاعدة البيانات ───
 def read_json(path):
     with db_lock:
         try:
@@ -112,60 +127,66 @@ class DatabaseManager:
     @staticmethod
     def get_users():
         return read_json(USERS_DB)
-
     @staticmethod
     def save_users(data):
         write_json(USERS_DB, data)
-
     @staticmethod
     def get_files():
         return read_json(FILES_DB)
-
     @staticmethod
     def save_files(data):
         write_json(FILES_DB, data)
-
     @staticmethod
     def get_settings():
         return read_json(SETTINGS_DB)
-
     @staticmethod
     def save_settings(data):
         write_json(SETTINGS_DB, data)
-
     @staticmethod
     def get_store():
         return read_json(STORE_DB)
-
     @staticmethod
     def save_store(data):
         write_json(STORE_DB, data)
-
     @staticmethod
     def get_admins():
         data = read_json(ADMINS_DB)
         return data.get("admins", [ADMIN_ID])
-
     @staticmethod
     def save_admins(data):
         write_json(ADMINS_DB, {"admins": data})
-
     @staticmethod
     def get_market():
         return read_json(MARKET_DB)
-
     @staticmethod
     def save_market(data):
         write_json(MARKET_DB, data)
-
     @staticmethod
     def get_security():
         return read_json(SECURITY_DB)
-
     @staticmethod
     def save_security(data):
         write_json(SECURITY_DB, data)
+    @staticmethod
+    def get_gifts():
+        return read_json(GIFTS_DB)
+    @staticmethod
+    def save_gifts(data):
+        write_json(GIFTS_DB, data)
+    @staticmethod
+    def get_stop_reasons():
+        return read_json(STOP_REASONS_DB)
+    @staticmethod
+    def save_stop_reasons(data):
+        write_json(STOP_REASONS_DB, data)
+    @staticmethod
+    def get_installed_libs():
+        return read_json(INSTALLED_LIBS_DB)
+    @staticmethod
+    def save_installed_libs(data):
+        write_json(INSTALLED_LIBS_DB, data)
 
+# ─── نظام التشفير ───
 class EncryptionManager:
     @staticmethod
     def get_master_key():
@@ -218,7 +239,7 @@ class EncryptionManager:
             }
             return json.dumps(encrypted_data)
         except Exception as e:
-            print(f"Encryption error: {e}")
+            print(f"خطأ تشفير: {e}")
             return None
 
     @staticmethod
@@ -235,7 +256,7 @@ class EncryptionManager:
             pt = unpad(cipher.decrypt(ct), AES.block_size)
             return pt.decode('utf-8')
         except Exception as e:
-            print(f"Decryption error: {e}")
+            print(f"خطأ فك تشفير: {e}")
             return None
 
     @staticmethod
@@ -257,6 +278,546 @@ class EncryptionManager:
             return EncryptionManager.decrypt_content(encrypted_content, fid)
         return None
 
+
+# ─── نظام استخراج المكتبات من الكود ───
+class SmartInstaller:
+    """نظام ذكي لاكتشاف وتثبيت المكتبات تلقائياً"""
+
+    # قاموس المكتبات الشائعة وأسماء حزم pip الخاصة بها
+    LIBRARY_MAP = {
+        'telebot': 'pyTelegramBotAPI',
+        'telegram': 'python-telegram-bot',
+        'pyrogram': 'pyrogram',
+        'aiogram': 'aiogram',
+        'requests': 'requests',
+        'aiohttp': 'aiohttp',
+        'flask': 'Flask',
+        'django': 'Django',
+        'fastapi': 'fastapi',
+        'numpy': 'numpy',
+        'pandas': 'pandas',
+        'pillow': 'Pillow',
+        'pil': 'Pillow',
+        'opencv': 'opencv-python',
+        'cv2': 'opencv-python',
+        'matplotlib': 'matplotlib',
+        'sqlalchemy': 'SQLAlchemy',
+        'pymongo': 'pymongo',
+        'redis': 'redis',
+        'psycopg2': 'psycopg2-binary',
+        'mysql': 'mysql-connector-python',
+        'sqlite3': None,  # مدمجة
+        'json': None,
+        'os': None,
+        'sys': None,
+        're': None,
+        'time': None,
+        'datetime': None,
+        'random': None,
+        'string': None,
+        'hashlib': None,
+        'base64': None,
+        'threading': None,
+        'subprocess': None,
+        'math': None,
+        'typing': None,
+        'collections': None,
+        'itertools': None,
+        'functools': None,
+        'pathlib': None,
+        'inspect': None,
+        'textwrap': None,
+        'html': None,
+        'urllib': None,
+        'http': None,
+        'socket': None,
+        'asyncio': None,
+        'logging': None,
+        'warnings': None,
+        'traceback': None,
+        'copy': None,
+        'pickle': None,
+        'csv': None,
+        'xml': None,
+        'html.parser': None,
+        'uuid': None,
+        'secrets': None,
+        'hmac': None,
+        'bisect': None,
+        'heapq': None,
+        'enum': None,
+        'dataclasses': None,
+        'zoneinfo': None,
+        'calendar': None,
+        'decimal': None,
+        'fractions': None,
+        'numbers': None,
+        'statistics': None,
+        'typing_extensions': 'typing_extensions',
+        'pydantic': 'pydantic',
+        'jinja2': 'Jinja2',
+        'markupsafe': 'MarkupSafe',
+        'werkzeug': 'Werkzeug',
+        'click': 'click',
+        'itsdangerous': 'itsdangerous',
+        'colorama': 'colorama',
+        'rich': 'rich',
+        'typer': 'typer',
+        'httpx': 'httpx',
+        'tornado': 'tornado',
+        'twisted': 'Twisted',
+        'scrapy': 'Scrapy',
+        'beautifulsoup4': 'beautifulsoup4',
+        'bs4': 'beautifulsoup4',
+        'lxml': 'lxml',
+        'selenium': 'selenium',
+        'playwright': 'playwright',
+        'pyppeteer': 'pyppeteer',
+        'schedule': 'schedule',
+        'apscheduler': 'APScheduler',
+        'celery': 'celery',
+        'rabbitmq': 'pika',
+        'pika': 'pika',
+        'kafka': 'kafka-python',
+        'elasticsearch': 'elasticsearch',
+        'pysftp': 'pysftp',
+        'paramiko': 'paramiko',
+        'fabric': 'fabric',
+        'ansible': 'ansible',
+        'docker': 'docker',
+        'kubernetes': 'kubernetes',
+        'boto3': 'boto3',
+        'botocore': 'botocore',
+        'google.cloud': 'google-cloud-storage',
+        'firebase_admin': 'firebase-admin',
+        'pyrebase': 'Pyrebase4',
+        'sendgrid': 'sendgrid',
+        'twilio': 'twilio',
+        'mailchimp': 'mailchimp-transactional',
+        'stripe': 'stripe',
+        'paypal': 'paypalrestsdk',
+        'braintree': 'braintree',
+        'razorpay': 'razorpay',
+        'ccxt': 'ccxt',
+        'yfinance': 'yfinance',
+        'alpha_vantage': 'alpha-vantage',
+        'quandl': 'Quandl',
+        'ta': 'ta',
+        'ta-lib': 'TA-Lib',
+        'backtrader': 'backtrader',
+        'zipline': 'zipline-reloaded',
+        'quantlib': 'QuantLib',
+        'pyfolio': 'pyfolio-reloaded',
+        'empyrical': 'empyrical',
+        'pyarrow': 'pyarrow',
+        'fastparquet': 'fastparquet',
+        'dask': 'dask',
+        'ray': 'ray',
+        'modin': 'modin',
+        'polars': 'polars',
+        'pyspark': 'pyspark',
+        'koalas': 'pyspark',
+        'tensorflow': 'tensorflow',
+        'torch': 'torch',
+        'keras': 'keras',
+        'sklearn': 'scikit-learn',
+        'xgboost': 'xgboost',
+        'lightgbm': 'lightgbm',
+        'catboost': 'catboost',
+        'optuna': 'optuna',
+        'hyperopt': 'hyperopt',
+        'mlflow': 'mlflow',
+        'wandb': 'wandb',
+        'tensorboard': 'tensorboard',
+        'transformers': 'transformers',
+        'datasets': 'datasets',
+        'tokenizers': 'tokenizers',
+        'accelerate': 'accelerate',
+        'diffusers': 'diffusers',
+        'peft': 'peft',
+        'bitsandbytes': 'bitsandbytes',
+        'safetensors': 'safetensors',
+        'onnx': 'onnx',
+        'onnxruntime': 'onnxruntime',
+        'openvino': 'openvino',
+        'tflite': 'tflite-runtime',
+        'coremltools': 'coremltools',
+        'nltk': 'nltk',
+        'spacy': 'spacy',
+        'gensim': 'gensim',
+        'textblob': 'textblob',
+        'vaderSentiment': 'vaderSentiment',
+        'pattern': 'pattern',
+        'polyglot': 'polyglot',
+        'stanza': 'stanza',
+        'allennlp': 'allennlp',
+        'flair': 'flair',
+        'sentence_transformers': 'sentence-transformers',
+        'chromadb': 'chromadb',
+        'faiss': 'faiss-cpu',
+        'annoy': 'annoy',
+        'hnswlib': 'hnswlib',
+        'weaviate': 'weaviate-client',
+        'pinecone': 'pinecone-client',
+        'qdrant_client': 'qdrant-client',
+        'milvus': 'pymilvus',
+        'openai': 'openai',
+        'anthropic': 'anthropic',
+        'google.generativeai': 'google-generativeai',
+        'cohere': 'cohere',
+        'replicate': 'replicate',
+        'huggingface_hub': 'huggingface-hub',
+        'gradio': 'gradio',
+        'streamlit': 'streamlit',
+        'dash': 'dash',
+        'panel': 'panel',
+        'bokeh': 'bokeh',
+        'altair': 'altair',
+        'plotly': 'plotly',
+        'seaborn': 'seaborn',
+        'networkx': 'networkx',
+        'igraph': 'python-igraph',
+        'pyvis': 'pyvis',
+        'd3': 'd3-py',
+        'folium': 'folium',
+        'geopandas': 'geopandas',
+        'shapely': 'shapely',
+        'rtree': 'rtree',
+        'pyproj': 'pyproj',
+        'cartopy': 'cartopy',
+        'basemap': 'basemap',
+        'osmnx': 'osmnx',
+        'geopy': 'geopy',
+        'timezonefinder': 'timezonefinder',
+        'pendulum': 'pendulum',
+        'arrow': 'arrow',
+        'maya': 'maya',
+        'dateparser': 'dateparser',
+        'parsedatetime': 'parsedatetime',
+        'recurring_ical_events': 'recurring-ical-events',
+        'icalendar': 'icalendar',
+        'pytz': 'pytz',
+        'babel': 'Babel',
+        'phonenumbers': 'phonenumbers',
+        'email_validator': 'email-validator',
+        'python-dateutil': 'python-dateutil',
+        'faker': 'Faker',
+        'factory_boy': 'factory-boy',
+        'pytest': 'pytest',
+        'unittest': None,
+        'mock': None,
+        'tox': 'tox',
+        'nox': 'nox',
+        'pre_commit': 'pre-commit',
+        'black': 'black',
+        'isort': 'isort',
+        'flake8': 'flake8',
+        'mypy': 'mypy',
+        'pylint': 'pylint',
+        'bandit': 'bandit',
+        'safety': 'safety',
+        'pip_audit': 'pip-audit',
+        'cryptography': 'cryptography',
+        'pynacl': 'PyNaCl',
+        'bcrypt': 'bcrypt',
+        'argon2': 'argon2-cffi',
+        'passlib': 'passlib',
+        'pyjwt': 'PyJWT',
+        'authlib': 'Authlib',
+        'oauthlib': 'oauthlib',
+        'requests_oauthlib': 'requests-oauthlib',
+        'flask_login': 'Flask-Login',
+        'flask_security': 'Flask-Security',
+        'django_allauth': 'django-allauth',
+        'python_jose': 'python-jose',
+        'python_multipart': 'python-multipart',
+        'starlette': 'starapi',
+        'uvicorn': 'uvicorn',
+        'gunicorn': 'gunicorn',
+        'nginx': None,
+        'supervisor': 'supervisor',
+        'circus': 'circus',
+        'honcho': 'honcho',
+        'foreman': None,
+        'pm2': None,
+        'newrelic': 'newrelic',
+        'datadog': 'datadog',
+        'sentry_sdk': 'sentry-sdk',
+        'loguru': 'loguru',
+        'structlog': 'structlog',
+        'pythonjsonlogger': 'python-json-logger',
+        'prometheus_client': 'prometheus-client',
+        'grafana_api': 'grafana-api',
+        'influxdb': 'influxdb-client',
+        'timescaledb': 'psycopg2-binary',
+        'clickhouse': 'clickhouse-driver',
+        'cassandra': 'cassandra-driver',
+        'scylla': 'scylla-driver',
+        'neo4j': 'neo4j',
+        'arangodb': 'python-arango',
+        'couchdb': 'CouchDB',
+        'rethinkdb': 'rethinkdb',
+        'dynamodb': 'boto3',
+        'bigtable': 'google-cloud-bigtable',
+        'spanner': 'google-cloud-spanner',
+        'datastore': 'google-cloud-datastore',
+        'firestore': 'google-cloud-firestore',
+        'pubsub': 'google-cloud-pubsub',
+        'bigquery': 'google-cloud-bigquery',
+        'snowflake': 'snowflake-connector-python',
+        'databricks': 'databricks-connect',
+        'trino': 'trino',
+        'presto': 'presto-python-client',
+        'drill': 'pydrill',
+        'impala': 'impyla',
+        'hive': 'pyhive',
+        'phoenix': 'phoenixdb',
+        'kylin': 'kylinpy',
+        'druid': 'pydruid',
+        'pinot': 'pinotdb',
+        'superset': 'apache-superset',
+        'metabase': None,
+        'redash': None,
+        'mode': None,
+        'looker': None,
+        'tableau': None,
+        'powerbi': None,
+        'qlik': None,
+        'sisense': None,
+        'domo': None,
+        'tibco': None,
+        'informatica': None,
+        'talend': None,
+        'pentaho': None,
+        'knime': None,
+        'alteryx': None,
+        'rapidminer': None,
+        'weka': None,
+        'orange': None,
+        'jupyter': 'jupyter',
+        'ipython': 'ipython',
+        'notebook': 'notebook',
+        'jupyterlab': 'jupyterlab',
+        'voila': 'voila',
+        'panel': 'panel',
+        'streamlit': 'streamlit',
+        'gradio': 'gradio',
+        'dash': 'dash',
+        'bokeh': 'bokeh',
+        'holoviews': 'holoviews',
+        'datashader': 'datashader',
+        'geoviews': 'geoviews',
+        'hvplot': 'hvplot',
+        'panel': 'panel',
+        'param': 'param',
+        'colorcet': 'colorcet',
+        'pyct': 'pyct',
+        'pyviz_comms': 'pyviz-comms',
+        'jupyter_bokeh': 'jupyter-bokeh',
+        'ipywidgets': 'ipywidgets',
+        'widgetsnbextension': 'widgetsnbextension',
+        'jupyterlab_widgets': 'jupyterlab-widgets',
+        'qgrid': 'qgrid',
+        'itables': 'itables',
+        'dtale': 'dtale',
+        'sweetviz': 'sweetviz',
+        'pandas_profiling': 'ydata-profiling',
+        'great_expectations': 'great-expectations',
+        'pandera': 'pandera',
+        'pydantic': 'pydantic',
+        'cerberus': 'Cerberus',
+        'marshmallow': 'marshmallow',
+        'schematics': 'schematics',
+        'voluptuous': 'voluptuous',
+        'traitlets': 'traitlets',
+        'attrs': 'attrs',
+        'cattrs': 'cattrs',
+        'pydantic_settings': 'pydantic-settings',
+        'python-dotenv': 'python-dotenv',
+        'environs': 'environs',
+        'dynaconf': 'dynaconf',
+        'confuse': 'confuse',
+        'configparser': None,
+        'argparse': None,
+        'optparse': None,
+        'getopt': None,
+        'fire': 'fire',
+        'docopt': 'docopt',
+        'plac': 'plac',
+        'invoke': 'invoke',
+        'fabric': 'fabric',
+        'paramiko': 'paramiko',
+        'scp': 'scp',
+        'pysftp': 'pysftp',
+        'ftplib': None,
+        'smtplib': None,
+        'imaplib': None,
+        'poplib': None,
+        'nntplib': None,
+        'telnetlib': None,
+        'socketserver': None,
+        'http.server': None,
+        'xmlrpc': None,
+        'wsgiref': None,
+        'cgi': None,
+        'cgitb': None,
+        'msilib': None,
+        'mmap': None,
+        'msvcrt': None,
+        'winreg': None,
+        'winsound': None,
+        'ossaudiodev': None,
+        'spwd': None,
+        'crypt': None,
+        'nis': None,
+        'nntplib': None,
+        'optparse': None,
+        'ossaudiodev': None,
+        'pipes': None,
+        'spwd': None,
+        'sunau': None,
+        'telnetlib': None,
+        'uu': None,
+        'xdrlib': None,
+        'zipapp': None,
+        'zoneinfo': None,
+        '_thread': None,
+        'atexit': None,
+        'contextlib': None,
+        'contextvars': None,
+        'concurrent': None,
+        'multiprocessing': None,
+        'sched': None,
+        'signal': None,
+        'socket': None,
+        'ssl': None,
+        'stat': None,
+        'tempfile': None,
+        'tty': None,
+        'webbrowser': None,
+        'xml': None,
+        'zipfile': None,
+        'gzip': None,
+        'bz2': None,
+        'lzma': None,
+        'zlib': None,
+        'binascii': None,
+        'codecs': None,
+        'encodings': None,
+        'io': None,
+        'string': None,
+        'fnmatch': None,
+        'glob': None,
+        'linecache': None,
+        'shutil': None,
+        'filecmp': None,
+        'stat': None,
+        'fileinput': None,
+        'mailbox': None,
+        'mimetypes': None,
+        'netrc': None,
+        'plistlib': None,
+        'tomllib': None,
+        'configparser': None,
+        'csv': None,
+        'json': None,
+        'pickle': None,
+        'shelve': None,
+        'dbm': None,
+        'sqlite3': None,
+        'hashlib': None,
+        'hmac': None,
+        'secrets': None,
+        'base64': None,
+        'binhex': None,
+        'uu': None,
+        'quopri': None,
+        'email': None,
+        'mailbox': None,
+        'mimetypes': None,
+        'base64': None,
+        'binascii': None,
+        'struct': None,
+        'codecs': None,
+    }
+
+    @staticmethod
+    def extract_imports(code_content):
+        """استخراج جميع المكتبات المستوردة من الكود"""
+        libraries = set()
+        try:
+            tree = ast.parse(code_content)
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        lib_name = alias.name.split('.')[0]
+                        libraries.add(lib_name)
+                elif isinstance(node, ast.ImportFrom):
+                    if node.module:
+                        lib_name = node.module.split('.')[0]
+                        libraries.add(lib_name)
+        except:
+            # fallback: regex
+            patterns = [
+                r'^import\s+([a-zA-Z_][a-zA-Z0-9_]*)',
+                r'^from\s+([a-zA-Z_][a-zA-Z0-9_]*)',
+            ]
+            for pattern in patterns:
+                for match in re.finditer(pattern, code_content, re.MULTILINE):
+                    libraries.add(match.group(1))
+        return libraries
+
+    @staticmethod
+    def get_pip_name(lib_name):
+        """الحصول على اسم حزمة pip من اسم المكتبة"""
+        return SmartInstaller.LIBRARY_MAP.get(lib_name.lower(), lib_name)
+
+    @staticmethod
+    def install_libraries(code_content, fid=None, notify_chat=None):
+        """تثبيت المكتبات المطلوبة تلقائياً"""
+        imports = SmartInstaller.extract_imports(code_content)
+        installed = DatabaseManager.get_installed_libs()
+        results = {'installed': [], 'already': [], 'failed': [], 'skipped': []}
+
+        for lib in imports:
+            pip_name = SmartInstaller.get_pip_name(lib)
+            if pip_name is None:
+                results['skipped'].append(lib)
+                continue
+
+            # التحقق من الذاكرة المؤقتة
+            if pip_name in installed and installed[pip_name].get('status') == 'ok':
+                results['already'].append(pip_name)
+                continue
+
+            try:
+                # التحقق إذا كانت مثبتة بالفعل
+                try:
+                    importlib.import_module(lib)
+                    installed[pip_name] = {'status': 'ok', 'date': datetime.now().isoformat()}
+                    DatabaseManager.save_installed_libs(installed)
+                    results['already'].append(pip_name)
+                    continue
+                except ImportError:
+                    pass
+
+                # تثبيت المكتبة
+                subprocess.check_call(
+                    [sys.executable, "-m", "pip", "install", "--quiet", pip_name],
+                    timeout=180,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
+                installed[pip_name] = {'status': 'ok', 'date': datetime.now().isoformat()}
+                DatabaseManager.save_installed_libs(installed)
+                results['installed'].append(pip_name)
+            except Exception as e:
+                results['failed'].append(f"{pip_name}: {str(e)[:50]}")
+
+        return results
+
+
+# ─── إدارة العمليات ───
 class ProcessManager:
     @staticmethod
     def start_script(fid):
@@ -270,14 +831,24 @@ class ProcessManager:
         encrypted_content = EncryptionManager.load_encrypted_file(fid)
         if not encrypted_content:
             return False
+
+        # تثبيت المكتبات الذكي
+        SmartInstaller.install_libraries(encrypted_content, fid)
+
         env_dir = os.path.join(ENV_DIR, fid)
         if not os.path.exists(env_dir):
             os.makedirs(env_dir)
         env_file_path = os.path.join(env_dir, f"{fid}.py")
+
         if fid in active_processes and active_processes[fid].poll() is None:
             return True
         if len(active_processes) >= RESOURCE_LIMITS['max_processes']:
             return False
+
+        # التحقق من التوقف المؤقت بسبب الرام
+        if fid in paused_bots:
+            return False
+
         try:
             with open(env_file_path, 'w', encoding='utf-8') as f:
                 f.write(encrypted_content)
@@ -307,7 +878,7 @@ class ProcessManager:
             return False
 
     @staticmethod
-    def stop_script(fid):
+    def stop_script(fid, reason=None):
         if fid in active_processes:
             proc = active_processes[fid]
             try:
@@ -322,13 +893,40 @@ class ProcessManager:
                 del process_hours[fid]
             if fid in process_resources:
                 del process_resources[fid]
+            # حفظ سبب الإيقاف
+            if reason:
+                stop_reasons = DatabaseManager.get_stop_reasons()
+                stop_reasons[fid] = {
+                    'reason': reason,
+                    'time': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    'stopped_by': 'system'
+                }
+                DatabaseManager.save_stop_reasons(stop_reasons)
             return True
+        return False
+
+    @staticmethod
+    def pause_bot(fid, reason="ضغط على موارد السيرفر"):
+        """إيقاف مؤقت للبوت"""
+        if fid not in paused_bots:
+            paused_bots.add(fid)
+            ProcessManager.stop_script(fid, reason)
+            return True
+        return False
+
+    @staticmethod
+    def resume_bot(fid):
+        """استئناف البوت بعد الإيقاف المؤقت"""
+        if fid in paused_bots:
+            paused_bots.discard(fid)
+            return ProcessManager.start_script(fid)
         return False
 
     @staticmethod
     def stop_all():
         for fid in list(active_processes.keys()):
             ProcessManager.stop_script(fid)
+        paused_bots.clear()
         return True
 
     @staticmethod
@@ -356,6 +954,7 @@ class ProcessManager:
         except:
             return None
 
+# ─── الأدوات المساعدة ───
 class Utilities:
     @staticmethod
     def gen_id(length=8):
@@ -365,7 +964,7 @@ class Utilities:
     def get_user_lang(user_id):
         users = DatabaseManager.get_users()
         u = users.get(str(user_id), {})
-        return u.get('lang', 'en')
+        return u.get('lang', 'ar')  # العربية افتراضية
 
     @staticmethod
     def get_user_style(user_id):
@@ -391,7 +990,7 @@ class Utilities:
     def get_text(user_id, key, **kwargs):
         lang = Utilities.get_user_lang(user_id)
         text_dict = TRANSLATIONS.get(key, {})
-        text = text_dict.get(lang, text_dict.get('en', key))
+        text = text_dict.get(lang, text_dict.get('ar', key))
         if kwargs:
             text = text.format(**kwargs)
         return text
@@ -412,10 +1011,19 @@ class Utilities:
         title = Utilities.get_text(user_id, title_key, **kwargs)
         content = Utilities.get_text(user_id, content_key, **kwargs)
         settings = DatabaseManager.get_settings()
-        name = settings.get('bot_name', 'Hosting Bot')
-        return (f"┌─⊷『 {title} 』\n│\n├ {content}\n│\n└─⊷ <b>{name}</b>\n"
-                f"<code> REDM00D </code>\n"
-                f"<code>channel t.me/PRO_APK_MOOD </code>\n{HIDDEN_LONG}")
+        name = settings.get('bot_name', 'بوت الاستضافة')
+
+        return (
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━ \n"
+            f"┃ ✦ {title}\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"{content}\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"┃ 🤖 <b>{name}</b>\n"
+            f"┃ 🔒 نظام آمن • 📡 @PRO_APK_MOOD\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"{HIDDEN_LONG}"
+        )
 
     @staticmethod
     def delete_last_message(chat_id):
@@ -587,9 +1195,9 @@ class Utilities:
                     if len(safe) > 3000:
                         safe = safe[:3000] + "\n..."
                     return f"<pre><code>{safe}</code></pre>"
-            return "No output available."
+            return "لا يوجد مخرجات."
         except:
-            return "Error reading logs."
+            return "خطأ في قراءة السجلات."
 
     @staticmethod
     def update_token_in_memory(content, new_token):
@@ -676,301 +1284,337 @@ class Utilities:
         except:
             pass
 
+    @staticmethod
+    def extend_file_time(fid, additional_hours, user_id):
+        """تمديد وقت البوت بدون إيقافه"""
+        files = DatabaseManager.get_files()
+        if fid not in files:
+            return False, "الملف غير موجود"
+
+        file_info = files[fid]
+        if file_info.get('type') == 'pro':
+            return True, "البوت VIP غير محدود"
+
+        users = DatabaseManager.get_users()
+        user = users.get(str(user_id), {})
+        current_points = user.get('points', 0)
+
+        if current_points < additional_hours:
+            return False, f"النقاط غير كافية. مطلوب: {additional_hours}, متوفر: {current_points}"
+
+        # خصم النقاط
+        users[str(user_id)]['points'] = current_points - additional_hours
+        DatabaseManager.save_users(users)
+
+        # إضافة الوقت
+        current_hours = process_hours.get(fid, 0)
+        process_hours[fid] = current_hours + additional_hours
+
+        return True, f"تم تمديد البوت بـ {additional_hours} ساعة. الإجمالي: {process_hours[fid]} ساعة"
+
+
+# ─── الترجمات (العربية افتراضية) ───
 TRANSLATIONS = {
     'welcome': {
-        'en': 'Welcome {name}!\n\nRank: {rank}\nPoints: {points}\nMember since: {date}',
-        'ar': 'أهلاً {name}!\n\nالرتبة: {rank}\nالنقاط: {points}\nعضو منذ: {date}'
+        'ar': 'أهلاً {name}! 👋\n\n🏅 الرتبة: {rank}\n💎 النقاط: {points}\n📅 عضو منذ: {date}',
+        'en': 'Welcome {name}! 👋\n\n🏅 Rank: {rank}\n💎 Points: {points}\n📅 Member since: {date}'
     },
-    'main_menu_title': {'en': 'Main Menu', 'ar': 'القائمة الرئيسية'},
-    'main_menu_rank': {'en': 'Rank: {rank}', 'ar': 'الرتبة: {rank}'},
-    'main_menu_points': {'en': 'Points: {points}', 'ar': 'النقاط: {points}'},
-    'upload': {'en': 'Upload New File', 'ar': 'رفع ملف جديد'},
-    'my_files': {'en': 'My Files', 'ar': 'ملفاتي'},
-    'store': {'en': 'Store', 'ar': 'المتجر'},
-    'wallet': {'en': 'Wallet', 'ar': 'المحفظة'},
-    'profile': {'en': 'Profile', 'ar': 'الملف الشخصي'},
-    'install_library': {'en': 'Install Library', 'ar': 'تثبيت مكتبة'},
-    'settings': {'en': 'Settings', 'ar': 'الإعدادات'},
-    'contact_dev': {'en': 'Contact Developer', 'ar': 'تواصل مع المطور'},
-    'admin_panel': {'en': 'Admin Panel', 'ar': 'لوحة الإدارة'},
-    'pro_panel': {'en': 'Pro Panel', 'ar': 'لوحة Pro'},
-    'download_all': {'en': 'Download All', 'ar': 'تحميل الكل'},
-    'auto_fix': {'en': 'Auto Fix', 'ar': 'إصلاح تلقائي'},
-    'test_run': {'en': 'Test Run', 'ar': 'تشغيل تجريبي'},
-    'sell_store': {'en': 'Sell in Store', 'ar': 'بيع في المتجر'},
-    'back': {'en': 'Back', 'ar': 'رجوع'},
-    'cancel': {'en': 'Cancel', 'ar': 'إلغاء'},
-    'bot_locked': {'en': 'Bot Locked', 'ar': 'البوت مغلق'},
-    'bot_locked_desc': {'en': 'Service is temporarily paused.\nContact support via the button below.', 'ar': 'الخدمة موقفة مؤقتاً.\nتواصل مع الدعم عبر الزر أدناه.'},
-    'subscription_required': {'en': 'Subscription Required', 'ar': 'اشتراك مطلوب'},
-    'subscription_desc': {'en': 'Please join the following channels to continue:', 'ar': 'يرجى الاشتراك في القنوات التالية للمتابعة:'},
-    'verify': {'en': 'Verify', 'ar': 'تحقق'},
-    'join': {'en': 'Join {name}', 'ar': 'انضم {name}'},
-    'language_selection': {'en': 'Select Language', 'ar': 'اختر اللغة'},
-    'choose_lang': {'en': 'Please choose your preferred language:', 'ar': 'يرجى اختيار لغتك المفضلة:'},
-    'english': {'en': 'English', 'ar': 'الإنجليزية'},
-    'arabic': {'en': 'Arabic', 'ar': 'العربية'},
-    'settings_title': {'en': 'Settings', 'ar': 'الإعدادات'},
-    'change_lang': {'en': 'Change Language', 'ar': 'تغيير اللغة'},
-    'change_style': {'en': 'Change Button Color', 'ar': 'تغيير لون الأزرار'},
-    'style_default': {'en': 'Default', 'ar': 'افتراضي'},
-    'style_primary': {'en': 'Blue (Primary)', 'ar': 'أزرق (رئيسي)'},
-    'style_success': {'en': 'Green (Success)', 'ar': 'أخضر (نجاح)'},
-    'style_danger': {'en': 'Red (Danger)', 'ar': 'أحمر (خطر)'},
-    'style_updated': {'en': 'Button color updated.', 'ar': 'تم تحديث لون الأزرار.'},
-    'lang_updated': {'en': 'Language updated.', 'ar': 'تم تحديث اللغة.'},
-    'wallet_title': {'en': 'Wallet', 'ar': 'المحفظة'},
-    'balance': {'en': 'Balance: {balance}', 'ar': 'الرصيد: {balance}'},
-    'rank': {'en': 'Rank: {rank}', 'ar': 'الرتبة: {rank}'},
-    'vip_expiry': {'en': 'VIP expiry: {expiry}', 'ar': 'صلاحية VIP: {expiry}'},
-    'points_info': {'en': 'Each point = 1 hour of hosting.', 'ar': 'كل نقطة = ساعة استضافة.'},
-    'daily_bonus': {'en': 'Daily Bonus', 'ar': 'المكافأة اليومية'},
-    'referral_link': {'en': 'Referral Link', 'ar': 'رابط الإحالة'},
-    'daily_claimed': {'en': 'Already claimed today!', 'ar': 'تم المطالبة اليوم!'},
-    'daily_earned': {'en': 'You earned {points} points!', 'ar': 'لقد حصلت على {points} نقاط!'},
-    'referral_text': {'en': 'Your referral link:\n<code>{link}</code>\n\nYou earn 10 points for each new user!', 'ar': 'رابط الإحالة الخاص بك:\n<code>{link}</code>\n\nتكسب 10 نقاط لكل مستخدم جديد!'},
-    'help_title': {'en': 'Help', 'ar': 'المساعدة'},
-    'help_text': {'en': 'Help Guide\n\nUpload a .py file and choose hosting type.\nFree hosting consumes points (1 point per hour).\nVIP hosting is unlimited.\n\nEarn points via daily bonus and referrals.\nManage your files from the "My Files" section.\nUse the terminal to interact with running bots.', 'ar': 'دليل المساعدة\n\nارفع ملف .py واختر نوع الاستضافة.\nالاستضافة المجانية تستهلك نقاط (نقطة لكل ساعة).\nاستضافة VIP غير محدودة.\n\nاحصل على نقاط عبر المكافأة اليومية والإحالات.\nأدر ملفاتك من قسم "ملفاتي".\nاستخدم الطرفية للتفاعل مع البوتات العاملة.'},
-    'upload_choice': {'en': 'Choose hosting type:', 'ar': 'اختر نوع الاستضافة:'},
-    'free_host': {'en': 'Free (points)', 'ar': 'مجاني (نقاط)'},
-    'vip_host': {'en': 'VIP (unlimited)', 'ar': 'VIP (غير محدود)'},
-    'send_file': {'en': 'Send your .py file:', 'ar': 'أرسل ملف .py الخاص بك:'},
-    'invalid_file': {'en': 'Please send a .py file.', 'ar': 'يرجى إرسال ملف .py.'},
-    'set_duration': {'en': 'Set Duration', 'ar': 'تحديد المدة'},
-    'duration_prompt': {'en': 'File: <b>{name}</b>\n\nYour points: <code>{points}</code>\n\nEnter number of hours (max {max}):', 'ar': 'الملف: <b>{name}</b>\n\nنقاطك: <code>{points}</code>\n\nأدخل عدد الساعات (الحد الأقصى {max}):'},
-    'invalid_number': {'en': 'Please enter a number.', 'ar': 'يرجى إدخال رقم.'},
-    'min_hour': {'en': 'Minimum 1 hour.', 'ar': 'ساعة واحدة على الأقل.'},
-    'insufficient_points': {'en': 'Required: {required}\nAvailable: {available}', 'ar': 'المطلوب: {required}\nالمتوفر: {available}'},
-    'file_uploaded': {'en': 'File uploaded.\n\n{name}\n{type}\n{duration}\n\nWaiting for approval.', 'ar': 'تم رفع الملف.\n\n{name}\n{type}\n{duration}\n\nفي انتظار الموافقة.'},
-    'file_accepted': {'en': 'File accepted automatically!\n\n{name}\n{duration}\nNow running.', 'ar': 'تم قبول الملف تلقائياً!\n\n{name}\n{duration}\nيعمل الآن.'},
-    'file_approved': {'en': 'Your file has been approved!\n\n{name}\n{duration}\nNow running.', 'ar': 'تمت الموافقة على ملفك!\n\n{name}\n{duration}\nيعمل الآن.'},
-    'file_rejected': {'en': 'Your file \'{name}\' has been rejected.', 'ar': 'تم رفض ملفك \'{name}\'.'},
-    'my_files_title': {'en': 'My Files', 'ar': 'ملفاتي'},
-    'files_count': {'en': 'Files: {count}', 'ar': 'الملفات: {count}'},
-    'running_count': {'en': 'Running: {count}', 'ar': 'يعمل: {count}'},
-    'stopped_count': {'en': 'Stopped: {count}', 'ar': 'متوقف: {count}'},
-    'no_files': {'en': 'No files.', 'ar': 'لا توجد ملفات.'},
-    'file_manager': {'en': 'File Manager', 'ar': 'إدارة الملف'},
-    'file_status': {'en': 'Status: {status}', 'ar': 'الحالة: {status}'},
-    'file_remaining': {'en': 'Remaining: {remaining}', 'ar': 'المتبقي: {remaining}'},
-    'file_type': {'en': 'Type: {type}', 'ar': 'النوع: {type}'},
-    'file_created': {'en': 'Created: {created}', 'ar': 'تاريخ الإنشاء: {created}'},
-    'start': {'en': 'Start', 'ar': 'تشغيل'},
-    'stop': {'en': 'Stop', 'ar': 'إيقاف'},
-    'terminal': {'en': 'Terminal', 'ar': 'الطرفية'},
-    'change_token': {'en': 'Change Token', 'ar': 'تغيير التوكن'},
-    'token_info': {'en': 'Token Info', 'ar': 'معلومات التوكن'},
-    'download': {'en': 'Download', 'ar': 'تحميل'},
-    'delete': {'en': 'Delete', 'ar': 'حذف'},
-    'confirm_delete': {'en': 'Are you sure you want to delete this file?', 'ar': 'هل أنت متأكد من حذف هذا الملف؟'},
-    'yes': {'en': 'Yes', 'ar': 'نعم'},
-    'no': {'en': 'No', 'ar': 'لا'},
-    'deleted': {'en': 'Deleted: {name}', 'ar': 'تم الحذف: {name}'},
-    'terminal_title': {'en': 'Terminal', 'ar': 'الطرفية'},
-    'terminal_output': {'en': 'File: {name}\nStatus: {status}\n\nTerminal:\n{output}', 'ar': 'الملف: {name}\nالحالة: {status}\n\nالطرفية:\n{output}'},
-    'refresh': {'en': 'Refresh', 'ar': 'تحديث'},
-    'input': {'en': 'Input', 'ar': 'إدخال'},
-    'input_sent': {'en': 'Sent: <code>{cmd}</code>', 'ar': 'تم الإرسال: <code>{cmd}</code>'},
-    'process_not_running': {'en': 'Process not running.', 'ar': 'العملية لا تعمل.'},
-    'token_updated': {'en': 'Token updated. Please restart the file.', 'ar': 'تم تحديث التوكن. يرجى إعادة تشغيل الملف.'},
-    'token_failed': {'en': 'Failed to update token.', 'ar': 'فشل تحديث التوكن.'},
-    'token_valid': {'en': 'Token is valid.', 'ar': 'التوكن صالح.'},
-    'token_invalid': {'en': 'Token is invalid.', 'ar': 'التوكن غير صالح.'},
-    'no_token': {'en': 'No token found.', 'ar': 'لم يتم العثور على توكن.'},
-    'bot_name': {'en': 'Bot name: {name}', 'ar': 'اسم البوت: {name}'},
-    'bot_image': {'en': 'Bot image: {state}', 'ar': 'صورة البوت: {state}'},
-    'file_thumb': {'en': 'File thumbnail: {state}', 'ar': 'صورة مصغرة للملف: {state}'},
-    'auto_approve': {'en': 'Auto-approve: {state}', 'ar': 'موافقة تلقائية: {state}'},
-    'enabled': {'en': 'Enabled', 'ar': 'مفعل'},
-    'disabled': {'en': 'Disabled', 'ar': 'معطل'},
-    'change_name': {'en': 'Change Name', 'ar': 'تغيير الاسم'},
-    'change_image': {'en': 'Change Image', 'ar': 'تغيير الصورة'},
-    'remove_image': {'en': 'Remove Image', 'ar': 'إزالة الصورة'},
-    'add_image': {'en': 'Add Image', 'ar': 'إضافة صورة'},
-    'change_thumb': {'en': 'Change Thumbnail', 'ar': 'تغيير الصورة المصغرة'},
-    'remove_thumb': {'en': 'Remove Thumbnail', 'ar': 'إزالة الصورة المصغرة'},
-    'add_thumb': {'en': 'Add Thumbnail', 'ar': 'إضافة صورة مصغرة'},
-    'name_set': {'en': 'Name set to: {name}', 'ar': 'تم تعيين الاسم: {name}'},
-    'image_updated': {'en': 'Image updated.', 'ar': 'تم تحديث الصورة.'},
-    'thumb_updated': {'en': 'Thumbnail updated.', 'ar': 'تم تحديث الصورة المصغرة.'},
-    'admin_panel_title': {'en': 'Admin Panel', 'ar': 'لوحة الإدارة'},
-    'admin_stats': {'en': 'Users: {users}\nFiles: {files}\nPending: {pending}\nActive: {active}\nAdmins: {admins}\n\nBot state: {state}\nAuto-approve: {auto}', 'ar': 'المستخدمين: {users}\nالملفات: {files}\nالمعلقة: {pending}\nالنشطة: {active}\nالأدمن: {admins}\n\nحالة البوت: {state}\nالموافقة التلقائية: {auto}'},
-    'unlock': {'en': 'Unlock', 'ar': 'فتح'},
-    'lock': {'en': 'Lock', 'ar': 'قفل'},
-    'auto_approve_toggle': {'en': 'Auto-approve', 'ar': 'موافقة تلقائية'},
-    'manual_approve': {'en': 'Manual approve', 'ar': 'موافقة يدوية'},
-    'users_list': {'en': 'Users', 'ar': 'المستخدمين'},
-    'admins_list': {'en': 'Admins', 'ar': 'الأدمن'},
-    'store_management': {'en': 'Store Management', 'ar': 'إدارة المتجر'},
-    'pending_files': {'en': 'Pending Files', 'ar': 'الملفات المعلقة'},
-    'broadcast': {'en': 'Broadcast', 'ar': 'إذاعة'},
-    'channels': {'en': 'Channels', 'ar': 'القنوات'},
-    'all_files': {'en': 'All Files', 'ar': 'جميع الملفات'},
-    'stop_all': {'en': 'Stop All', 'ar': 'إيقاف الكل'},
-    'pending_count': {'en': 'Pending: {count}', 'ar': 'المعلقة: {count}'},
-    'file_review': {'en': 'Review', 'ar': 'مراجعة'},
-    'file_owner': {'en': 'Owner: {owner}', 'ar': 'المالك: {owner}'},
-    'approve': {'en': 'Approve', 'ar': 'قبول'},
-    'reject': {'en': 'Reject', 'ar': 'رفض'},
-    'user_management': {'en': 'User Management', 'ar': 'إدارة المستخدم'},
-    'user_id': {'en': 'ID: {id}', 'ar': 'المعرف: {id}'},
-    'user_username': {'en': 'Username: @{username}', 'ar': 'اسم المستخدم: @{username}'},
-    'user_joined': {'en': 'Joined: {date}', 'ar': 'انضم: {date}'},
-    'user_points': {'en': 'Points: {points}', 'ar': 'النقاط: {points}'},
-    'user_rank': {'en': 'Rank: {rank}', 'ar': 'الرتبة: {rank}'},
-    'user_expiry': {'en': 'VIP expiry: {expiry}', 'ar': 'صلاحية VIP: {expiry}'},
-    'user_files': {'en': 'Files: {files}', 'ar': 'الملفات: {files}'},
-    'user_status': {'en': 'Status: {status}', 'ar': 'الحالة: {status}'},
-    'active': {'en': 'Active', 'ar': 'نشط'},
-    'banned': {'en': 'Banned', 'ar': 'محظور'},
-    'ban': {'en': 'Ban', 'ar': 'حظر'},
-    'unban': {'en': 'Unban', 'ar': 'فك الحظر'},
-    'grant_vip': {'en': 'Grant VIP', 'ar': 'منح VIP'},
-    'remove_vip': {'en': 'Remove VIP', 'ar': 'إزالة VIP'},
-    'charge': {'en': 'Charge', 'ar': 'شحن'},
-    'message_user': {'en': 'Message', 'ar': 'رسالة'},
-    'charge_points': {'en': 'Enter points to add:', 'ar': 'أدخل النقاط للإضافة:'},
-    'charge_success': {'en': 'Added {amount} points.', 'ar': 'تم إضافة {amount} نقاط.'},
-    'message_sent': {'en': 'Message sent.', 'ar': 'تم إرسال الرسالة.'},
-    'grant_vip_prompt': {'en': 'Enter days (0 for lifetime):', 'ar': 'أدخل عدد الأيام (0 مدى الحياة):'},
-    'grant_vip_success': {'en': 'VIP granted for {duration}.', 'ar': 'تم منح VIP لمدة {duration}.'},
-    'remove_vip_success': {'en': 'VIP removed.', 'ar': 'تم إزالة VIP.'},
-    'add_admin': {'en': 'Add Admin', 'ar': 'إضافة أدمن'},
-    'add_admin_prompt': {'en': 'Enter the user ID:', 'ar': 'أدخل معرف المستخدم:'},
-    'admin_added': {'en': 'Admin added: {id}', 'ar': 'تم إضافة الأدمن: {id}'},
-    'admin_exists': {'en': 'User is already an admin.', 'ar': 'المستخدم أدمن بالفعل.'},
-    'admin_removed': {'en': 'Admin removed.', 'ar': 'تم إزالة الأدمن.'},
-    'cannot_remove_owner': {'en': 'Cannot remove the main owner!', 'ar': 'لا يمكن إزالة المالك الرئيسي!'},
-    'only_owner': {'en': 'Only the main owner can do this.', 'ar': 'فقط المالك الرئيسي يمكنه فعل هذا.'},
-    'store_item': {'en': 'File: {name}\nPrice: {price}', 'ar': 'الملف: {name}\nالسعر: {price}'},
-    'add_store_file': {'en': 'Add Store File', 'ar': 'إضافة ملف للمتجر'},
-    'set_price': {'en': 'Set Price', 'ar': 'تحديد السعر'},
-    'price_prompt': {'en': 'Enter price in points:', 'ar': 'أدخل السعر بالنقاط:'},
-    'store_added': {'en': 'Added: {name}\nPrice: {price}', 'ar': 'تم الإضافة: {name}\nالسعر: {price}'},
-    'price_updated': {'en': 'Price updated to {price}.', 'ar': 'تم تحديث السعر إلى {price}.'},
-    'store_deleted': {'en': 'Deleted: {name}', 'ar': 'تم الحذف: {name}'},
-    'broadcast_sending': {'en': 'Sending to {count} users...', 'ar': 'جاري الإرسال لـ {count} مستخدم...'},
-    'broadcast_complete': {'en': 'Broadcast complete.\n\nSuccessful: {success}\nFailed: {failed}\nTotal: {total}', 'ar': 'اكتملت الإذاعة.\n\nنجح: {success}\nفشل: {failed}\nالإجمالي: {total}'},
-    'channels_list': {'en': 'Channels: {count}', 'ar': 'القنوات: {count}'},
-    'add_channel': {'en': 'Add Channel', 'ar': 'إضافة قناة'},
-    'add_channel_prompt': {'en': 'Send the channel username (e.g., @channel):', 'ar': 'أرسل معرف القناة (مثال: @channel):'},
-    'channel_added': {'en': 'Added: {name}', 'ar': 'تم الإضافة: {name}'},
-    'channel_not_found': {'en': 'Channel not found.', 'ar': 'القناة غير موجودة.'},
-    'channel_removed': {'en': 'Removed: {name}', 'ar': 'تم الإزالة: {name}'},
-    'library_install': {'en': 'Installing library: {lib}', 'ar': 'جاري تثبيت المكتبة: {lib}'},
-    'library_installed': {'en': 'Installed: {lib}', 'ar': 'تم التثبيت: {lib}'},
-    'library_timeout': {'en': 'Timeout: {lib}', 'ar': 'انتهت المهلة: {lib}'},
-    'library_failed': {'en': 'Failed: {lib}', 'ar': 'فشل: {lib}'},
-    'edit_store': {'en': 'Edit Store Item', 'ar': 'تعديل عنصر المتجر'},
-    'change_price': {'en': 'Change Price', 'ar': 'تغيير السعر'},
-    'buy': {'en': 'Buy', 'ar': 'شراء'},
-    'buy_confirm_text': {'en': 'File: {name}\nPrice: {price}\nYour balance: <code>{balance}</code>\n\n{status}', 'ar': 'الملف: {name}\nالسعر: {price}\nرصيدك: <code>{balance}</code>\n\n{status}'},
-    'sufficient': {'en': 'Sufficient points!', 'ar': 'نقاط كافية!'},
-    'insufficient': {'en': 'Insufficient points!', 'ar': 'نقاط غير كافية!'},
-    'purchase_success': {'en': 'Purchase successful!', 'ar': 'تم الشراء بنجاح!'},
-    'purchase_failed': {'en': 'Purchase failed.', 'ar': 'فشل الشراء.'},
-    'store_empty': {'en': 'Store is empty.', 'ar': 'المتجر فارغ.'},
-    'test_run_select': {'en': 'Select a file to test:', 'ar': 'اختر ملفاً للتشغيل التجريبي:'},
-    'test_run_success': {'en': 'Test run successful!', 'ar': 'تم التشغيل التجريبي بنجاح!'},
-    'test_run_error': {'en': 'Error: {error}', 'ar': 'خطأ: {error}'},
-    'access_denied': {'en': 'Access denied!', 'ar': 'ممنوع الوصول!'},
-    'file_not_found': {'en': 'File not found!', 'ar': 'الملف غير موجود!'},
-    'download_failed': {'en': 'Download failed!', 'ar': 'فشل التحميل!'},
-    'no_files_to_download': {'en': 'No files to download!', 'ar': 'لا توجد ملفات للتحميل!'},
-    'vip_only': {'en': 'VIP only!', 'ar': 'VIP فقط!'},
-    'insufficient_points_short': {'en': 'Insufficient points!', 'ar': 'نقاط غير كافية!'},
-    'file_saved': {'en': 'File saved successfully.', 'ar': 'تم حفظ الملف بنجاح.'},
-    'save_failed': {'en': 'Failed to save file.', 'ar': 'فشل حفظ الملف.'},
-    'new_user_notify': {'en': 'New user registered!\n\nName: {name}\nID: <code>{id}</code>\nUsername: {username}\nDate: {date}', 'ar': 'مستخدم جديد!\n\nالاسم: {name}\nالمعرف: <code>{id}</code>\nاسم المستخدم: {username}\nالتاريخ: {date}'},
-    'user_banned_notify': {'en': 'You have been banned.', 'ar': 'لقد تم حظرك.'},
-    'user_unbanned_notify': {'en': 'Your ban has been lifted.', 'ar': 'تم رفع الحظر عنك.'},
-    'vip_granted_notify': {'en': 'You have been upgraded to VIP for {duration}.', 'ar': 'تم ترقيتك إلى VIP لمدة {duration}.'},
-    'vip_removed_notify': {'en': 'Your VIP status has been removed.', 'ar': 'تم إلغاء صلاحية VIP الخاصة بك.'},
-    'points_added_notify': {'en': '<b>{amount}</b> points have been added to your balance.', 'ar': 'تم إضافة <b>{amount}</b> نقاط إلى رصيدك.'},
-    'admin_promoted_notify': {'en': 'You have been made an admin!', 'ar': 'لقد تم تعيينك أدمن!'},
-    'file_upload_notify': {'en': 'New file upload\n\nUser: {user}\nID: <code>{id}</code>\nFile: {file}\nType: {type}\nDuration: {duration}', 'ar': 'رفع ملف جديد\n\nالمستخدم: {user}\nالمعرف: <code>{id}</code>\nالملف: {file}\nالنوع: {type}\nالمدة: {duration}'},
-    'time_expired_notify': {'en': 'Your bot \'{name}\' has reached its time limit.', 'ar': 'انتهت مدة البوت \'{name}\'.'},
-    'stopped_subscription_notify': {'en': 'Your bot \'{name}\' was stopped due to missing subscription.', 'ar': 'تم إيقاف البوت \'{name}\' بسبب عدم الاشتراك.'},
-    'resource_limit_notify': {'en': 'Your bot \'{name}\' was stopped due to exceeding resource limits.', 'ar': 'تم إيقاف البوت \'{name}\' بسبب تجاوز حدود الموارد.'},
-    'system_usage': {'en': 'System Usage:\nCPU: {cpu}%\nMemory: {mem_mb} MB\nActive processes: {processes}', 'ar': 'استخدام النظام:\nCPU: {cpu}%\nالذاكرة: {mem_mb} ميجابايت\nالعمليات النشطة: {processes}'},
-    'not_subscribed': {'en': 'You are not subscribed.', 'ar': 'أنت غير مشترك.'},
-    'subscribe_first': {'en': 'Please subscribe first.', 'ar': 'يرجى الاشتراك أولاً.'},
-    'previous': {'en': 'Previous', 'ar': 'السابق'},
-    'next': {'en': 'Next', 'ar': 'التالي'},
-    'locked': {'en': 'Locked', 'ar': 'مقفل'},
-    'unlocked': {'en': 'Unlocked', 'ar': 'مفتوح'},
-    'enter_library_name': {'en': 'Enter the library name to install:', 'ar': 'أدخل اسم المكتبة للتثبيت:'},
-    'enter_message': {'en': 'Enter the message to send:', 'ar': 'أدخل الرسالة للإرسال:'},
-    'send_token': {'en': 'Send the new token:', 'ar': 'أرسل التوكن الجديد:'},
-    'enter_name': {'en': 'Enter the new bot name:', 'ar': 'أدخل اسم البوت الجديد:'},
-    'send_image': {'en': 'Send an image:', 'ar': 'أرسل صورة:'},
-    'error': {'en': 'Error', 'ar': 'خطأ'},
-    'success': {'en': 'Success', 'ar': 'نجاح'},
-    'invalid_user_id': {'en': 'Invalid user ID.', 'ar': 'معرف المستخدم غير صالح.'},
-    'failed': {'en': 'Operation failed.', 'ar': 'فشلت العملية.'},
-    'invalid_price': {'en': 'Invalid price.', 'ar': 'سعر غير صالح.'},
-    'referral_bonus': {'en': 'Referral Bonus', 'ar': 'مكافأة الإحالة'},
-    'approved': {'en': 'Approved', 'ar': 'تم القبول'},
-    'rejected': {'en': 'Rejected', 'ar': 'تم الرفض'},
-    'no_pending': {'en': 'No pending files.', 'ar': 'لا توجد ملفات معلقة.'},
-    'running': {'en': 'Running', 'ar': 'يعمل'},
-    'stopped': {'en': 'Stopped', 'ar': 'متوقف'},
-    'pending_review': {'en': 'Pending Review', 'ar': 'قيد المراجعة'},
-    'accepted': {'en': 'Accepted', 'ar': 'تم القبول'},
-    'file': {'en': 'File: {name}', 'ar': 'الملف: {name}'},
-    'duration': {'en': 'Duration: {duration}', 'ar': 'المدة: {duration}'},
-    'unbanned': {'en': 'Unbanned', 'ar': 'تم رفع الحظر'},
-    'done': {'en': 'Done', 'ar': 'تم'},
-    'downloaded': {'en': 'Downloaded', 'ar': 'تم التحميل'},
-    'started': {'en': 'Started', 'ar': 'تم التشغيل'},
-    'start_failed': {'en': 'Failed to start', 'ar': 'فشل التشغيل'},
-    'all_stopped': {'en': 'All processes stopped.', 'ar': 'تم إيقاف جميع العمليات.'},
-    'image_removed': {'en': 'Image removed.', 'ar': 'تم إزالة الصورة.'},
-    'thumb_removed': {'en': 'Thumbnail removed.', 'ar': 'تم إزالة الصورة المصغرة.'},
-    'invalid_username': {'en': 'Invalid username.', 'ar': 'اسم المستخدم غير صالح.'},
-    'time_expired': {'en': 'Time Expired', 'ar': 'انتهى الوقت'},
-    'vip_removed': {'en': 'VIP removed.', 'ar': 'تم إزالة VIP.'},
+    'main_menu_title': {'ar': '⚡ القائمة الرئيسية ⚡', 'en': '⚡ Main Menu ⚡'},
+    'main_menu_rank': {'ar': '🏅 الرتبة: {rank}', 'en': '🏅 Rank: {rank}'},
+    'main_menu_points': {'ar': '💎 النقاط: {points}', 'en': '💎 Points: {points}'},
+    'upload': {'ar': '📤 رفع ملف جديد', 'en': '📤 Upload New File'},
+    'my_files': {'ar': '📁 ملفاتي', 'en': '📁 My Files'},
+    'store': {'ar': '🛒 المتجر', 'en': '🛒 Store'},
+    'wallet': {'ar': '💰 المحفظة', 'en': '💰 Wallet'},
+    'profile': {'ar': '👤 الملف الشخصي', 'en': '👤 Profile'},
+    'install_library': {'ar': '📚 تثبيت مكتبة', 'en': '📚 Install Library'},
+    'settings': {'ar': '⚙️ الإعدادات', 'en': '⚙️ Settings'},
+    'contact_dev': {'ar': '💬 تواصل مع المطور', 'en': '💬 Contact Developer'},
+    'admin_panel': {'ar': '🔐 لوحة الإدارة', 'en': '🔐 Admin Panel'},
+    'pro_panel': {'ar': '👑 لوحة Pro', 'en': '👑 Pro Panel'},
+    'download_all': {'ar': '📥 تحميل الكل', 'en': '📥 Download All'},
+    'auto_fix': {'ar': '🔧 إصلاح تلقائي', 'en': '🔧 Auto Fix'},
+    'test_run': {'ar': '🧪 تشغيل تجريبي', 'en': '🧪 Test Run'},
+    'sell_store': {'ar': '💰 بيع في المتجر', 'en': '💰 Sell in Store'},
+    'back': {'ar': '🔙 رجوع', 'en': '🔙 Back'},
+    'cancel': {'ar': '❌ إلغاء', 'en': '❌ Cancel'},
+    'bot_locked': {'ar': '🔒 البوت مغلق', 'en': '🔒 Bot Locked'},
+    'bot_locked_desc': {'ar': 'الخدمة موقفة مؤقتاً.\nتواصل مع الدعم عبر الزر أدناه.', 'en': 'Service is temporarily paused.\nContact support via the button below.'},
+    'subscription_required': {'ar': '📢 اشتراك مطلوب', 'en': '📢 Subscription Required'},
+    'subscription_desc': {'ar': 'يرجى الاشتراك في القنوات التالية للمتابعة:', 'en': 'Please join the following channels to continue:'},
+    'verify': {'ar': '✅ تحقق', 'en': '✅ Verify'},
+    'join': {'ar': '📢 انضم {name}', 'en': '📢 Join {name}'},
+    'language_selection': {'ar': '🌐 اختيار اللغة', 'en': '🌐 Select Language'},
+    'choose_lang': {'ar': 'يرجى اختيار لغتك المفضلة:', 'en': 'Please choose your preferred language:'},
+    'english': {'ar': '🇬🇧 الإنجليزية', 'en': '🇬🇧 English'},
+    'arabic': {'ar': '🇸🇦 العربية', 'en': '🇸🇦 Arabic'},
+    'settings_title': {'ar': '⚙️ الإعدادات', 'en': '⚙️ Settings'},
+    'change_lang': {'ar': '🌐 تغيير اللغة', 'en': '🌐 Change Language'},
+    'change_style': {'ar': '🎨 تغيير لون الأزرار', 'en': '🎨 Change Button Color'},
+    'style_default': {'ar': '⚪ افتراضي', 'en': '⚪ Default'},
+    'style_primary': {'ar': '🔵 أزرق', 'en': '🔵 Blue'},
+    'style_success': {'ar': '🟢 أخضر', 'en': '🟢 Green'},
+    'style_danger': {'ar': '🔴 أحمر', 'en': '🔴 Red'},
+    'style_updated': {'ar': '✅ تم تحديث لون الأزرار.', 'en': '✅ Button color updated.'},
+    'lang_updated': {'ar': '✅ تم تحديث اللغة.', 'en': '✅ Language updated.'},
+    'wallet_title': {'ar': '💰 المحفظة', 'en': '💰 Wallet'},
+    'balance': {'ar': '💎 الرصيد: {balance}', 'en': '💎 Balance: {balance}'},
+    'rank': {'ar': '🏅 الرتبة: {rank}', 'en': '🏅 Rank: {rank}'},
+    'vip_expiry': {'ar': '⏳ صلاحية VIP: {expiry}', 'en': '⏳ VIP expiry: {expiry}'},
+    'points_info': {'ar': '💡 كل نقطة = ساعة استضافة.', 'en': '💡 Each point = 1 hour of hosting.'},
+    'daily_bonus': {'ar': '🎁 المكافأة اليومية', 'en': '🎁 Daily Bonus'},
+    'referral_link': {'ar': '🔗 رابط الإحالة', 'en': '🔗 Referral Link'},
+    'daily_claimed': {'ar': '❌ تم المطالبة اليوم!', 'en': '❌ Already claimed today!'},
+    'daily_earned': {'ar': '🎉 لقد حصلت على {points} نقاط!', 'en': '🎉 You earned {points} points!'},
+    'referral_text': {'ar': '🔗 رابط الإحالة الخاص بك:\n<code>{link}</code>\n\n💰 تكسب 10 نقاط لكل مستخدم جديد!', 'en': '🔗 Your referral link:\n<code>{link}</code>\n\n💰 You earn 10 points for each new user!'},
+    'help_title': {'ar': '❓ المساعدة', 'en': '❓ Help'},
+    'help_text': {'ar': '📖 دليل المساعدة\n\n1️⃣ ارفع ملف .py واختر نوع الاستضافة\n2️⃣ الاستضافة المجانية تستهلك نقاط (نقطة لكل ساعة)\n3️⃣ استضافة VIP غير محدودة\n4️⃣ احصل على نقاط عبر المكافأة اليومية والإحالات\n5️⃣ أدر ملفاتك من قسم "ملفاتي"\n6️⃣ استخدم الطرفية للتفاعل مع البوتات العاملة', 
+              'en': '📖 Help Guide\n\n1️⃣ Upload a .py file and choose hosting type\n2️⃣ Free hosting consumes points (1 point per hour)\n3️⃣ VIP hosting is unlimited\n4️⃣ Earn points via daily bonus and referrals\n5️⃣ Manage your files from "My Files"\n6️⃣ Use the terminal to interact with running bots'},
+    'upload_choice': {'ar': '📤 اختر نوع الاستضافة:', 'en': '📤 Choose hosting type:'},
+    'free_host': {'ar': '🆓 مجاني (نقاط)', 'en': '🆓 Free (points)'},
+    'vip_host': {'ar': '👑 VIP (غير محدود)', 'en': '👑 VIP (unlimited)'},
+    'send_file': {'ar': '📎 أرسل ملف .py الخاص بك:', 'en': '📎 Send your .py file:'},
+    'invalid_file': {'ar': '❌ يرجى إرسال ملف .py.', 'en': '❌ Please send a .py file.'},
+    'set_duration': {'ar': '⏱️ تحديد المدة', 'en': '⏱️ Set Duration'},
+    'duration_prompt': {'ar': '📄 الملف: <b>{name}</b>\n\n💎 نقاطك: <code>{points}</code>\n\n⏱️ أدخل عدد الساعات (الحد الأقصى {max}):', 
+                   'en': '📄 File: <b>{name}</b>\n\n💎 Your points: <code>{points}</code>\n\n⏱️ Enter number of hours (max {max}):'},
+    'invalid_number': {'ar': '❌ يرجى إدخال رقم صحيح.', 'en': '❌ Please enter a valid number.'},
+    'min_hour': {'ar': '⚠️ ساعة واحدة على الأقل.', 'en': '⚠️ Minimum 1 hour.'},
+    'insufficient_points': {'ar': '❌ المطلوب: {required}\n💎 المتوفر: {available}', 'en': '❌ Required: {required}\n💎 Available: {available}'},
+    'file_uploaded': {'ar': '✅ تم رفع الملف.\n\n📄 {name}\n🏷️ {type}\n⏱️ {duration}\n\n⏳ في انتظار الموافقة.', 
+                 'en': '✅ File uploaded.\n\n📄 {name}\n🏷️ {type}\n⏱️ {duration}\n\n⏳ Waiting for approval.'},
+    'file_accepted': {'ar': '🎉 تم قبول الملف تلقائياً!\n\n📄 {name}\n⏱️ {duration}\n\n🚀 يعمل الآن.', 
+                 'en': '🎉 File accepted automatically!\n\n📄 {name}\n⏱️ {duration}\n\n🚀 Now running.'},
+    'file_approved': {'ar': '🎉 تمت الموافقة على ملفك!\n\n📄 {name}\n⏱️ {duration}\n\n🚀 يعمل الآن.', 
+                 'en': '🎉 Your file has been approved!\n\n📄 {name}\n⏱️ {duration}\n\n🚀 Now running.'},
+    'file_rejected': {'ar': '❌ تم رفض ملفك \'{name}\'.', 'en': '❌ Your file \'{name}\' has been rejected.'},
+    'my_files_title': {'ar': '📁 ملفاتي', 'en': '📁 My Files'},
+    'files_count': {'ar': '📊 الملفات: {count}', 'en': '📊 Files: {count}'},
+    'running_count': {'ar': '🟢 يعمل: {count}', 'en': '🟢 Running: {count}'},
+    'stopped_count': {'ar': '🔴 متوقف: {count}', 'en': '🔴 Stopped: {count}'},
+    'no_files': {'ar': '📭 لا توجد ملفات.', 'en': '📭 No files.'},
+    'file_manager': {'ar': '⚙️ إدارة الملف', 'en': '⚙️ File Manager'},
+    'file_status': {'ar': '📊 الحالة: {status}', 'en': '📊 Status: {status}'},
+    'file_remaining': {'ar': '⏱️ المتبقي: {remaining}', 'en': '⏱️ Remaining: {remaining}'},
+    'file_type': {'ar': '🏷️ النوع: {type}', 'en': '🏷️ Type: {type}'},
+    'file_created': {'ar': '📅 تاريخ الإنشاء: {created}', 'en': '📅 Created: {created}'},
+    'start': {'ar': '🟢 تشغيل', 'en': '🟢 Start'},
+    'stop': {'ar': '🔴 إيقاف', 'en': '🔴 Stop'},
+    'terminal': {'ar': '💻 الطرفية', 'en': '💻 Terminal'},
+    'change_token': {'ar': '🔑 تغيير التوكن', 'en': '🔑 Change Token'},
+    'token_info': {'ar': 'ℹ️ معلومات التوكن', 'en': 'ℹ️ Token Info'},
+    'download': {'ar': '📥 تحميل', 'en': '📥 Download'},
+    'delete': {'ar': '🗑️ حذف', 'en': '🗑️ Delete'},
+    'confirm_delete': {'ar': '⚠️ هل أنت متأكد من حذف هذا الملف؟', 'en': '⚠️ Are you sure you want to delete this file?'},
+    'yes': {'ar': '✅ نعم', 'en': '✅ Yes'},
+    'no': {'ar': '❌ لا', 'en': '❌ No'},
+    'deleted': {'ar': '🗑️ تم الحذف: {name}', 'en': '🗑️ Deleted: {name}'},
+    'terminal_title': {'ar': '💻 الطرفية', 'en': '💻 Terminal'},
+    'terminal_output': {'ar': '📄 الملف: {name}\n📊 الحالة: {status}\n\n💻 الطرفية:\n{output}', 
+                   'en': '📄 File: {name}\n📊 Status: {status}\n\n💻 Terminal:\n{output}'},
+    'refresh': {'ar': '🔄 تحديث', 'en': '🔄 Refresh'},
+    'input': {'ar': '⌨️ إدخال', 'en': '⌨️ Input'},
+    'input_sent': {'ar': '✅ تم الإرسال: <code>{cmd}</code>', 'en': '✅ Sent: <code>{cmd}</code>'},
+    'process_not_running': {'ar': '❌ العملية لا تعمل.', 'en': '❌ Process not running.'},
+    'token_updated': {'ar': '✅ تم تحديث التوكن. يرجى إعادة تشغيل الملف.', 'en': '✅ Token updated. Please restart the file.'},
+    'token_failed': {'ar': '❌ فشل تحديث التوكن.', 'en': '❌ Failed to update token.'},
+    'token_valid': {'ar': '✅ التوكن صالح.', 'en': '✅ Token is valid.'},
+    'token_invalid': {'ar': '❌ التوكن غير صالح.', 'en': '❌ Token is invalid.'},
+    'no_token': {'ar': '❌ لم يتم العثور على توكن.', 'en': '❌ No token found.'},
+    'bot_name': {'ar': '🤖 اسم البوت: {name}', 'en': '🤖 Bot name: {name}'},
+    'bot_image': {'ar': '🖼️ صورة البوت: {state}', 'en': '🖼️ Bot image: {state}'},
+    'file_thumb': {'ar': '🖼️ الصورة المصغرة: {state}', 'en': '🖼️ File thumbnail: {state}'},
+    'auto_approve': {'ar': '✅ الموافقة التلقائية: {state}', 'en': '✅ Auto-approve: {state}'},
+    'enabled': {'ar': '🟢 مفعل', 'en': '🟢 Enabled'},
+    'disabled': {'ar': '🔴 معطل', 'en': '🔴 Disabled'},
+    'change_name': {'ar': '✏️ تغيير الاسم', 'en': '✏️ Change Name'},
+    'change_image': {'ar': '🖼️ تغيير الصورة', 'en': '🖼️ Change Image'},
+    'remove_image': {'ar': '🗑️ إزالة الصورة', 'en': '🗑️ Remove Image'},
+    'add_image': {'ar': '➕ إضافة صورة', 'en': '➕ Add Image'},
+    'change_thumb': {'ar': '🖼️ تغيير الصورة المصغرة', 'en': '🖼️ Change Thumbnail'},
+    'remove_thumb': {'ar': '🗑️ إزالة الصورة المصغرة', 'en': '🗑️ Remove Thumbnail'},
+    'add_thumb': {'ar': '➕ إضافة صورة مصغرة', 'en': '➕ Add Thumbnail'},
+    'name_set': {'ar': '✅ تم تعيين الاسم: {name}', 'en': '✅ Name set to: {name}'},
+    'image_updated': {'ar': '✅ تم تحديث الصورة.', 'en': '✅ Image updated.'},
+    'thumb_updated': {'ar': '✅ تم تحديث الصورة المصغرة.', 'en': '✅ Thumbnail updated.'},
+    'admin_panel_title': {'ar': '🔐 لوحة الإدارة', 'en': '🔐 Admin Panel'},
+    'admin_stats': {'ar': '👥 المستخدمين: {users}\n📁 الملفات: {files}\n⏳ المعلقة: {pending}\n🟢 النشطة: {active}\n👮 الأدمن: {admins}\n\n🔒 حالة البوت: {state}\n✅ الموافقة التلقائية: {auto}', 
+               'en': '👥 Users: {users}\n📁 Files: {files}\n⏳ Pending: {pending}\n🟢 Active: {active}\n👮 Admins: {admins}\n\n🔒 Bot state: {state}\n✅ Auto-approve: {auto}'},
+    'unlock': {'ar': '🔓 فتح', 'en': '🔓 Unlock'},
+    'lock': {'ar': '🔒 قفل', 'en': '🔒 Lock'},
+    'auto_approve_toggle': {'ar': '✅ تفعيل الموافقة التلقائية', 'en': '✅ Enable Auto-approve'},
+    'manual_approve': {'ar': '👤 موافقة يدوية', 'en': '👤 Manual approve'},
+    'users_list': {'ar': '👥 المستخدمين', 'en': '👥 Users'},
+    'admins_list': {'ar': '👮 الأدمن', 'en': '👮 Admins'},
+    'store_management': {'ar': '🛒 إدارة المتجر', 'en': '🛒 Store Management'},
+    'pending_files': {'ar': '⏳ الملفات المعلقة', 'en': '⏳ Pending Files'},
+    'broadcast': {'ar': '📢 إذاعة', 'en': '📢 Broadcast'},
+    'channels': {'ar': '📢 القنوات', 'en': '📢 Channels'},
+    'all_files': {'ar': '📁 جميع الملفات', 'en': '📁 All Files'},
+    'stop_all': {'ar': '🛑 إيقاف الكل', 'en': '🛑 Stop All'},
+    'pending_count': {'ar': '⏳ المعلقة: {count}', 'en': '⏳ Pending: {count}'},
+    'file_review': {'ar': '👁️ مراجعة', 'en': '👁️ Review'},
+    'file_owner': {'ar': '👤 المالك: {owner}', 'en': '👤 Owner: {owner}'},
+    'approve': {'ar': '✅ قبول', 'en': '✅ Approve'},
+    'reject': {'ar': '❌ رفض', 'en': '❌ Reject'},
+    'user_management': {'ar': '⚙️ إدارة المستخدم', 'en': '⚙️ User Management'},
+    'user_id': {'ar': '🆔 المعرف: {id}', 'en': '🆔 ID: {id}'},
+    'user_username': {'ar': '👤 اسم المستخدم: @{username}', 'en': '👤 Username: @{username}'},
+    'user_joined': {'ar': '📅 انضم: {date}', 'en': '📅 Joined: {date}'},
+    'user_points': {'ar': '💎 النقاط: {points}', 'en': '💎 Points: {points}'},
+    'user_rank': {'ar': '🏅 الرتبة: {rank}', 'en': '🏅 Rank: {rank}'},
+    'user_expiry': {'ar': '⏳ صلاحية VIP: {expiry}', 'en': '⏳ VIP expiry: {expiry}'},
+    'user_files': {'ar': '📁 الملفات: {files}', 'en': '📁 Files: {files}'},
+    'user_status': {'ar': '📊 الحالة: {status}', 'en': '📊 Status: {status}'},
+    'active': {'ar': '🟢 نشط', 'en': '🟢 Active'},
+    'banned': {'ar': '🔴 محظور', 'en': '🔴 Banned'},
+    'ban': {'ar': '🔴 حظر', 'en': '🔴 Ban'},
+    'unban': {'ar': '🟢 فك الحظر', 'en': '🟢 Unban'},
+    'grant_vip': {'ar': '👑 منح VIP', 'en': '👑 Grant VIP'},
+    'remove_vip': {'ar': '❌ إزالة VIP', 'en': '❌ Remove VIP'},
+    'charge': {'ar': '💰 شحن', 'en': '💰 Charge'},
+    'message_user': {'ar': '💬 رسالة', 'en': '💬 Message'},
+    'charge_points': {'ar': '💎 أدخل النقاط للإضافة:', 'en': '💎 Enter points to add:'},
+    'charge_success': {'ar': '✅ تم إضافة {amount} نقاط.', 'en': '✅ Added {amount} points.'},
+    'message_sent': {'ar': '✅ تم إرسال الرسالة.', 'en': '✅ Message sent.'},
+    'grant_vip_prompt': {'ar': '⏳ أدخل عدد الأيام (0 مدى الحياة):', 'en': '⏳ Enter days (0 for lifetime):'},
+    'grant_vip_success': {'ar': '👑 تم منح VIP لمدة {duration}.', 'en': '👑 VIP granted for {duration}.'},
+    'remove_vip_success': {'ar': '❌ تم إزالة VIP.', 'en': '❌ VIP removed.'},
+    'add_admin': {'ar': '➕ إضافة أدمن', 'en': '➕ Add Admin'},
+    'add_admin_prompt': {'ar': '🆔 أدخل معرف المستخدم:', 'en': '🆔 Enter the user ID:'},
+    'admin_added': {'ar': '✅ تم إضافة الأدمن: {id}', 'en': '✅ Admin added: {id}'},
+    'admin_exists': {'ar': '⚠️ المستخدم أدمن بالفعل.', 'en': '⚠️ User is already an admin.'},
+    'admin_removed': {'ar': '✅ تم إزالة الأدمن.', 'en': '✅ Admin removed.'},
+    'cannot_remove_owner': {'ar': '❌ لا يمكن إزالة المالك الرئيسي!', 'en': '❌ Cannot remove the main owner!'},
+    'only_owner': {'ar': '⚠️ فقط المالك الرئيسي يمكنه فعل هذا.', 'en': '⚠️ Only the main owner can do this.'},
+    'store_item': {'ar': '📄 الملف: {name}\n💰 السعر: {price}', 'en': '📄 File: {name}\n💰 Price: {price}'},
+    'add_store_file': {'ar': '➕ إضافة ملف للمتجر', 'en': '➕ Add Store File'},
+    'set_price': {'ar': '💰 تحديد السعر', 'en': '💰 Set Price'},
+    'price_prompt': {'ar': '💰 أدخل السعر بالنقاط:', 'en': '💰 Enter price in points:'},
+    'store_added': {'ar': '✅ تم الإضافة: {name}\n💰 السعر: {price}', 'en': '✅ Added: {name}\n💰 Price: {price}'},
+    'price_updated': {'ar': '✅ تم تحديث السعر إلى {price}.', 'en': '✅ Price updated to {price}.'},
+    'store_deleted': {'ar': '🗑️ تم الحذف: {name}', 'en': '🗑️ Deleted: {name}'},
+    'broadcast_sending': {'ar': '📢 جاري الإرسال لـ {count} مستخدم...', 'en': '📢 Sending to {count} users...'},
+    'broadcast_complete': {'ar': '✅ اكتملت الإذاعة.\n\n✅ نجح: {success}\n❌ فشل: {failed}\n📊 الإجمالي: {total}', 
+                      'en': '✅ Broadcast complete.\n\n✅ Successful: {success}\n❌ Failed: {failed}\n📊 Total: {total}'},
+    'channels_list': {'ar': '📢 القنوات: {count}', 'en': '📢 Channels: {count}'},
+    'add_channel': {'ar': '➕ إضافة قناة', 'en': '➕ Add Channel'},
+    'add_channel_prompt': {'ar': '📢 أرسل معرف القناة (مثال: @channel):', 'en': '📢 Send the channel username (e.g., @channel):'},
+    'channel_added': {'ar': '✅ تم الإضافة: {name}', 'en': '✅ Added: {name}'},
+    'channel_not_found': {'ar': '❌ القناة غير موجودة.', 'en': '❌ Channel not found.'},
+    'channel_removed': {'ar': '✅ تم الإزالة: {name}', 'en': '✅ Removed: {name}'},
+    'library_install': {'ar': '📚 جاري تثبيت المكتبة: {lib}', 'en': '📚 Installing library: {lib}'},
+    'library_installed': {'ar': '✅ تم التثبيت: {lib}', 'en': '✅ Installed: {lib}'},
+    'library_timeout': {'ar': '⏱️ انتهت المهلة: {lib}', 'en': '⏱️ Timeout: {lib}'},
+    'library_failed': {'ar': '❌ فشل: {lib}', 'en': '❌ Failed: {lib}'},
+    'edit_store': {'ar': '✏️ تعديل عنصر المتجر', 'en': '✏️ Edit Store Item'},
+    'change_price': {'ar': '💰 تغيير السعر', 'en': '💰 Change Price'},
+    'buy': {'ar': '💰 شراء', 'en': '💰 Buy'},
+    'buy_confirm_text': {'ar': '📄 الملف: {name}\n💰 السعر: {price}\n💎 رصيدك: <code>{balance}</code>\n\n{status}', 
+                    'en': '📄 File: {name}\n💰 Price: {price}\n💎 Your balance: <code>{balance}</code>\n\n{status}'},
+    'sufficient': {'ar': '✅ نقاط كافية!', 'en': '✅ Sufficient points!'},
+    'insufficient': {'ar': '❌ نقاط غير كافية!', 'en': '❌ Insufficient points!'},
+    'purchase_success': {'ar': '🎉 تم الشراء بنجاح!', 'en': '🎉 Purchase successful!'},
+    'purchase_failed': {'ar': '❌ فشل الشراء.', 'en': '❌ Purchase failed.'},
+    'store_empty': {'ar': '📭 المتجر فارغ.', 'en': '📭 Store is empty.'},
+    'test_run_select': {'ar': '📄 اختر ملفاً للتشغيل التجريبي:', 'en': '📄 Select a file to test:'},
+    'test_run_success': {'ar': '✅ تم التشغيل التجريبي بنجاح!', 'en': '✅ Test run successful!'},
+    'test_run_error': {'ar': '❌ خطأ: {error}', 'en': '❌ Error: {error}'},
+    'access_denied': {'ar': '🚫 ممنوع الوصول!', 'en': '🚫 Access denied!'},
+    'file_not_found': {'ar': '❌ الملف غير موجود!', 'en': '❌ File not found!'},
+    'download_failed': {'ar': '❌ فشل التحميل!', 'en': '❌ Download failed!'},
+    'no_files_to_download': {'ar': '📭 لا توجد ملفات للتحميل!', 'en': '📭 No files to download!'},
+    'vip_only': {'ar': '👑 VIP فقط!', 'en': '👑 VIP only!'},
+    'insufficient_points_short': {'ar': '❌ نقاط غير كافية!', 'en': '❌ Insufficient points!'},
+    'file_saved': {'ar': '✅ تم حفظ الملف بنجاح.', 'en': '✅ File saved successfully.'},
+    'save_failed': {'ar': '❌ فشل حفظ الملف.', 'en': '❌ Failed to save file.'},
+    'new_user_notify': {'ar': '🎉 مستخدم جديد!\n\n👤 الاسم: {name}\n🆔 المعرف: <code>{id}</code>\n👤 اسم المستخدم: {username}\n📅 التاريخ: {date}', 
+                   'en': '🎉 New user registered!\n\n👤 Name: {name}\n🆔 ID: <code>{id}</code>\n👤 Username: {username}\n📅 Date: {date}'},
+    'user_banned_notify': {'ar': '🔴 لقد تم حظرك.', 'en': '🔴 You have been banned.'},
+    'user_unbanned_notify': {'ar': '🟢 تم رفع الحظر عنك.', 'en': '🟢 Your ban has been lifted.'},
+    'vip_granted_notify': {'ar': '👑 تم ترقيتك إلى VIP لمدة {duration}.', 'en': '👑 You have been upgraded to VIP for {duration}.'},
+    'vip_removed_notify': {'ar': '❌ تم إلغاء صلاحية VIP الخاصة بك.', 'en': '❌ Your VIP status has been removed.'},
+    'points_added_notify': {'ar': '💰 تم إضافة <b>{amount}</b> نقاط إلى رصيدك.', 'en': '💰 <b>{amount}</b> points have been added to your balance.'},
+    'admin_promoted_notify': {'ar': '👮 لقد تم تعيينك أدمن!', 'en': '👮 You have been made an admin!'},
+    'file_upload_notify': {'ar': '📤 رفع ملف جديد\n\n👤 المستخدم: {user}\n🆔 المعرف: <code>{id}</code>\n📄 الملف: {file}\n🏷️ النوع: {type}\n⏱️ المدة: {duration}', 
+                      'en': '📤 New file upload\n\n👤 User: {user}\n🆔 ID: <code>{id}</code>\n📄 File: {file}\n🏷️ Type: {type}\n⏱️ Duration: {duration}'},
+    'time_expired_notify': {'ar': '⏱️ انتهت مدة البوت \'{name}\'.', 'en': '⏱️ Your bot \'{name}\' has reached its time limit.'},
+    'stopped_subscription_notify': {'ar': '🔴 تم إيقاف البوت \'{name}\' بسبب عدم الاشتراك.', 'en': '🔴 Your bot \'{name}\' was stopped due to missing subscription.'},
+    'resource_limit_notify': {'ar': '⚠️ تم إيقاف البوت \'{name}\' بسبب تجاوز حدود الموارد.', 'en': '⚠️ Your bot \'{name}\' was stopped due to exceeding resource limits.'},
+    'system_usage': {'ar': '📊 استخدام النظام:\n🖥️ CPU: {cpu}%\n💾 الذاكرة: {mem_mb} ميجابايت\n⚙️ العمليات النشطة: {processes}', 
+                'en': '📊 System Usage:\n🖥️ CPU: {cpu}%\n💾 Memory: {mem_mb} MB\n⚙️ Active processes: {processes}'},
+    'not_subscribed': {'ar': '❌ أنت غير مشترك.', 'en': '❌ You are not subscribed.'},
+    'subscribe_first': {'ar': '⚠️ يرجى الاشتراك أولاً.', 'en': '⚠️ Please subscribe first.'},
+    'previous': {'ar': '◀️ السابق', 'en': '◀️ Previous'},
+    'next': {'ar': '▶️ التالي', 'en': '▶️ Next'},
+    'locked': {'ar': '🔒 مقفل', 'en': '🔒 Locked'},
+    'unlocked': {'ar': '🔓 مفتوح', 'en': '🔓 Unlocked'},
+    'enter_library_name': {'ar': '📚 أدخل اسم المكتبة للتثبيت:', 'en': '📚 Enter the library name to install:'},
+    'enter_message': {'ar': '💬 أدخل الرسالة للإرسال:', 'en': '💬 Enter the message to send:'},
+    'send_token': {'ar': '🔑 أرسل التوكن الجديد:', 'en': '🔑 Send the new token:'},
+    'enter_name': {'ar': '✏️ أدخل اسم البوت الجديد:', 'en': '✏️ Enter the new bot name:'},
+    'send_image': {'ar': '🖼️ أرسل صورة:', 'en': '🖼️ Send an image:'},
+    'error': {'ar': '❌ خطأ', 'en': '❌ Error'},
+    'success': {'ar': '✅ نجاح', 'en': '✅ Success'},
+    'invalid_user_id': {'ar': '❌ معرف المستخدم غير صالح.', 'en': '❌ Invalid user ID.'},
+    'failed': {'ar': '❌ فشلت العملية.', 'en': '❌ Operation failed.'},
+    'invalid_price': {'ar': '❌ سعر غير صالح.', 'en': '❌ Invalid price.'},
+    'referral_bonus': {'ar': '🎁 مكافأة الإحالة', 'en': '🎁 Referral Bonus'},
+    'approved': {'ar': '✅ تم القبول', 'en': '✅ Approved'},
+    'rejected': {'ar': '❌ تم الرفض', 'en': '❌ Rejected'},
+    'no_pending': {'ar': '📭 لا توجد ملفات معلقة.', 'en': '📭 No pending files.'},
+    'running': {'ar': '🟢 يعمل', 'en': '🟢 Running'},
+    'stopped': {'ar': '🔴 متوقف', 'en': '🔴 Stopped'},
+    'pending_review': {'ar': '⏳ قيد المراجعة', 'en': '⏳ Pending Review'},
+    'accepted': {'ar': '✅ تم القبول', 'en': '✅ Accepted'},
+    'file': {'ar': '📄 الملف: {name}', 'en': '📄 File: {name}'},
+    'duration': {'ar': '⏱️ المدة: {duration}', 'en': '⏱️ Duration: {duration}'},
+    'unbanned': {'ar': '🟢 تم رفع الحظر', 'en': '🟢 Unbanned'},
+    'done': {'ar': '✅ تم', 'en': '✅ Done'},
+    'downloaded': {'ar': '✅ تم التحميل', 'en': '✅ Downloaded'},
+    'started': {'ar': '✅ تم التشغيل', 'en': '✅ Started'},
+    'start_failed': {'ar': '❌ فشل التشغيل', 'en': '❌ Failed to start'},
+    'all_stopped': {'ar': '🛑 تم إيقاف جميع العمليات.', 'en': '🛑 All processes stopped.'},
+    'image_removed': {'ar': '🗑️ تم إزالة الصورة.', 'en': '🗑️ Image removed.'},
+    'thumb_removed': {'ar': '🗑️ تم إزالة الصورة المصغرة.', 'en': '🗑️ Thumbnail removed.'},
+    'invalid_username': {'ar': '❌ اسم المستخدم غير صالح.', 'en': '❌ Invalid username.'},
+    'time_expired': {'ar': '⏱️ انتهى الوقت', 'en': '⏱️ Time Expired'},
+    'vip_removed': {'ar': '❌ تم إزالة VIP.', 'en': '❌ VIP removed.'},
+    'extend_time': {'ar': '⏱️ تمديد الوقت', 'en': '⏱️ Extend Time'},
+    'extend_prompt': {'ar': '⏱️ أدخل عدد الساعات الإضافية:', 'en': '⏱️ Enter additional hours:'},
+    'extend_success': {'ar': '✅ {message}', 'en': '✅ {message}'},
+    'extend_failed': {'ar': '❌ {message}', 'en': '❌ {message}'},
+    'bot_paused': {'ar': '⏸️ البوت متوقف مؤقتاً بسبب ضغط السيرفر.', 'en': '⏸️ Bot paused due to server load.'},
+    'bot_resumed': {'ar': '▶️ تم استئناف البوت.', 'en': '▶️ Bot resumed.'},
+    'stop_reason': {'ar': '🛑 سبب الإيقاف: {reason}', 'en': '🛑 Stop reason: {reason}'},
+    'stopped_by_admin': {'ar': '🛑 تم إيقاف البوت من قبل الإدارة.\n📋 السبب: {reason}', 'en': '🛑 Bot stopped by admin.\n📋 Reason: {reason}'},
+    'gifts_title': {'ar': '🎁 نظام الهدايا', 'en': '🎁 Gift System'},
+    'send_gift_all': {'ar': '🎁 إرسال هدية للجميع', 'en': '🎁 Send Gift to All'},
+    'send_gift_user': {'ar': '🎁 إرسال هدية لمستخدم', 'en': '🎁 Send Gift to User'},
+    'gift_points_prompt': {'ar': '💎 أدخل عدد النقاط:', 'en': '💎 Enter points amount:'},
+    'gift_sent_all': {'ar': '🎁 تم إرسال {points} نقطة لـ {count} مستخدم!', 'en': '🎁 Sent {points} points to {count} users!'},
+    'gift_sent_user': {'ar': '🎁 تم إرسال {points} نقطة للمستخدم!', 'en': '🎁 Sent {points} points to user!'},
+    'view_system_usage': {'ar': '📊 عرض استهلاك الموارد', 'en': '📊 View System Usage'},
+    'system_usage_current': {'ar': '📊 استهلاك الموارد الحالي:\n\n🖥️ CPU: {cpu}%\n💾 RAM: {ram}% ({ram_mb} MB)\n💾 RAM المستخدم: {used_mb} MB / {total_mb} MB\n⚙️ البوتات النشطة: {active}\n⏸️ البوتات المتوقفة مؤقتاً: {paused}', 
+                        'en': '📊 Current System Usage:\n\n🖥️ CPU: {cpu}%\n💾 RAM: {ram}% ({ram_mb} MB)\n💾 RAM Used: {used_mb} MB / {total_mb} MB\n⚙️ Active Bots: {active}\n⏸️ Paused Bots: {paused}'},
+    'download_specific': {'ar': '📥 تحميل ملف محدد', 'en': '📥 Download Specific File'},
+    'choose_file_download': {'ar': '📄 اختر الملف للتحميل:', 'en': '📄 Choose file to download:'},
+    'smart_install': {'ar': '📚 التثبيت الذكي للمكتبات', 'en': '📚 Smart Library Install'},
+    'smart_install_results': {'ar': '📚 نتائج التثبيت الذكي:\n\n✅ تم التثبيت: {installed}\n📦 مثبت مسبقاً: {already}\n⏭️ تم التخطي (مدمج): {skipped}\n❌ فشل: {failed}', 
+                         'en': '📚 Smart Install Results:\n\n✅ Installed: {installed}\n📦 Already installed: {already}\n⏭️ Skipped (built-in): {skipped}\n❌ Failed: {failed}'},
+    'preview_code': {'ar': '👁️ معاينة الكود', 'en': '👁️ Preview Code'},
+    'extend_time_btn': {'ar': '⏱️ تمديد الوقت', 'en': '⏱️ Extend Time'},
+    'file_extended': {'ar': '✅ تم تمديد الوقت بنجاح!\n⏱️ الوقت الجديد: {hours} ساعة', 'en': '✅ Time extended successfully!\n⏱️ New time: {hours} hours'},
+    'stop_bot_admin': {'ar': '🛑 إيقاف البوت (أدمن)', 'en': '🛑 Stop Bot (Admin)'},
+    'enter_stop_reason': {'ar': '📋 أدخل سبب الإيقاف:', 'en': '📋 Enter stop reason:'},
+    'bot_stopped_admin': {'ar': '🛑 تم إيقاف البوت.\n📋 السبب: {reason}', 'en': '🛑 Bot stopped.\n📋 Reason: {reason}'},
+    'user_gift_notify': {'ar': '🎁 لقد تلقيت هدية!\n💎 <b>{points}</b> نقاط من الإدارة.', 'en': '🎁 You received a gift!\n💎 <b>{points}</b> points from admin.'},
+    'ram_alert': {'ar': '⚠️ تنبيه! استهلاك الرام وصل إلى {ram}%\n⏸️ تم إيقاف جميع البوتات مؤقتاً.', 'en': '⚠️ Alert! RAM usage reached {ram}%\n⏸️ All bots paused temporarily.'},
+    'ram_normal': {'ar': '✅ استهلاك الرام عاد للطبيعي ({ram}%).\n▶️ تم استئناف البوتات.', 'en': '✅ RAM usage back to normal ({ram}%).\n▶️ Bots resumed.'},
 }
 
-def init_database():
-    default_channels = [
-        {"username": "@F7_7G", "name": "F7_7G"},
-        {"username": "@H_U_VB", "name": "H_U_VB"},
-        {"username": "@seed_1k", "name": "seed_1k"},
-        {"username": "@TERBO_CODE", "name": "TERBO_CODE"},
-        {"username": "@BQBOOB1", "name": "BQBOOB1"},
-        {"username": "@bshshshkk", "name": "bshshshkk"},
-        {"username": "@EQJ_1", "name": "EQJ_1"},
-        {"username": "@HAMO_X_OT3", "name": "HAMO_X_OT3"}
-    ]
-    settings = DatabaseManager.get_settings()
-    if 'channels' not in settings:
-        settings['channels'] = default_channels
-    defaults = {
-        "bot_name": "Hosting Bot",
-        "bot_image": None,
-        "file_thumb": None,
-        "bot_locked": False,
-        "auto_approve": True
-    }
-    for key, value in defaults.items():
-        if key not in settings:
-            settings[key] = value
-    DatabaseManager.save_settings(settings)
-    for path in [USERS_DB, FILES_DB, STORE_DB, MARKET_DB, SECURITY_DB]:
-        if not os.path.exists(path):
-            write_json(path, {})
-    admins = DatabaseManager.get_admins()
-    if ADMIN_ID not in admins:
-        admins.append(ADMIN_ID)
-        DatabaseManager.save_admins(admins)
-    security = DatabaseManager.get_security()
-    if 'master_key' not in security:
-        master_key = base64.b64encode(get_random_bytes(32)).decode('utf-8')
-        security['master_key'] = master_key
-        security['file_keys'] = {}
-        DatabaseManager.save_security(security)
 
+# ─── دوال لوحة المفاتيح ───
 def build_main_keyboard(uid):
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.add(Utilities.create_button(Utilities.get_text(uid, 'upload'), "nav_upload", uid))
@@ -1016,8 +1660,8 @@ def build_back_keyboard(uid, data="nav_main"):
 
 def build_language_keyboard(uid):
     kb = types.InlineKeyboardMarkup(row_width=2)
-    kb.add(Utilities.create_button("English", "set_lang_en", uid))
-    kb.add(Utilities.create_button("العربية", "set_lang_ar", uid))
+    kb.add(Utilities.create_button("🇸🇦 العربية", "set_lang_ar", uid))
+    kb.add(Utilities.create_button("🇬🇧 الإنجليزية", "set_lang_en", uid))
     return kb
 
 def build_style_keyboard(uid):
@@ -1036,6 +1680,40 @@ def build_settings_keyboard(uid):
     kb.add(Utilities.create_button(Utilities.get_text(uid, 'back'), "nav_main", uid))
     return kb
 
+# ─── تهيئة قاعدة البيانات ───
+def init_database():
+    default_channels = [
+        {"username": "@PRO_APK_MOOD", "name": "PRO_APK_MOOD"}
+    ]
+    settings = DatabaseManager.get_settings()
+    if 'channels' not in settings:
+        settings['channels'] = default_channels
+    defaults = {
+        "bot_name": "بوت الاستضافة الاحترافي",
+        "bot_image": None,
+        "file_thumb": None,
+        "bot_locked": False,
+        "auto_approve": True
+    }
+    for key, value in defaults.items():
+        if key not in settings:
+            settings[key] = value
+    DatabaseManager.save_settings(settings)
+    for path in [USERS_DB, FILES_DB, STORE_DB, MARKET_DB, SECURITY_DB, GIFTS_DB, STOP_REASONS_DB, INSTALLED_LIBS_DB]:
+        if not os.path.exists(path):
+            write_json(path, {})
+    admins = DatabaseManager.get_admins()
+    if ADMIN_ID not in admins:
+        admins.append(ADMIN_ID)
+        DatabaseManager.save_admins(admins)
+    security = DatabaseManager.get_security()
+    if 'master_key' not in security:
+        master_key = base64.b64encode(get_random_bytes(32)).decode('utf-8')
+        security['master_key'] = master_key
+        security['file_keys'] = {}
+        DatabaseManager.save_security(security)
+
+# ─── معالج الأمر /start ───
 @bot.message_handler(commands=['start'])
 def start_command(msg):
     try:
@@ -1060,7 +1738,7 @@ def start_command(msg):
                         udb[str(ref)]['points'] = udb[str(ref)].get('points', 0) + 10
                         DatabaseManager.save_users(udb)
                         try:
-                            bot.send_message(int(ref), Utilities.format_border(uid, 'referral_bonus', 'You earned 10 points for referring a new user!'))
+                            bot.send_message(int(ref), Utilities.format_border(int(ref), 'referral_bonus', '💰 لقد حصلت على 10 نقاط لإحالة مستخدم جديد!'))
                         except:
                             pass
             users[str(uid)] = {
@@ -1073,7 +1751,7 @@ def start_command(msg):
                 'expiry': None,
                 'last_daily': None,
                 'notifications': True,
-                'lang': 'en',
+                'lang': 'ar',  # العربية افتراضية
                 'button_style': 'default'
             }
             DatabaseManager.save_users(users)
@@ -1095,7 +1773,7 @@ def start_command(msg):
                 pass
         users = DatabaseManager.get_users()
         if users.get(str(uid), {}).get('is_banned', 0) == 1:
-            bot.send_message(msg.chat.id, Utilities.format_border(uid, 'banned', 'You have been banned.'))
+            bot.send_message(msg.chat.id, Utilities.format_border(uid, 'banned', '🔴 لقد تم حظرك.'))
             return
         if not Utilities.check_subscription(uid):
             subscription_required(msg.chat.id, uid)
@@ -1111,8 +1789,7 @@ def start_command(msg):
                                    build_language_keyboard(uid))
             return
         vip = Utilities.is_user_pro(uid)
-        rank = 'VIP' if vip else 'Free'
-        rank_ar = 'VIP' if vip else 'مجاني'
+        rank = 'VIP' if vip else 'مجاني'
         text = Utilities.get_text(uid, 'welcome', name=escape(msg.from_user.first_name), rank=rank, points=u.get('points', 0), date=u.get('join_date', 'today'))
         Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'main_menu_title', text), build_main_keyboard(uid))
     except Exception as e:
@@ -1129,6 +1806,8 @@ def subscription_required(chat_id, uid):
     kb.add(Utilities.create_button(Utilities.get_text(uid, 'verify'), "check_sub", uid))
     Utilities.send_message(chat_id, uid, Utilities.format_border(uid, 'subscription_required', 'subscription_desc'), kb)
 
+
+# ─── معالج الأزرار ───
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callback(call):
     try:
@@ -1137,20 +1816,21 @@ def handle_callback(call):
         data = call.data
         users = DatabaseManager.get_users()
         settings = DatabaseManager.get_settings()
+
         if settings.get('bot_locked', False) and not Utilities.is_admin(uid):
-            bot.answer_callback_query(call.id, "Bot is locked!", show_alert=True)
+            bot.answer_callback_query(call.id, "🔒 البوت مغلق!", show_alert=True)
             Utilities.send_message(cid, uid, Utilities.format_border(uid, 'bot_locked', 'bot_locked_desc'),
                                    types.InlineKeyboardMarkup().add(Utilities.create_button(Utilities.get_text(uid, 'contact_dev'), f"tg://user?id={ADMIN_ID}", uid)))
             return
         if str(uid) in users and users[str(uid)].get('is_banned', 0) == 1:
-            bot.answer_callback_query(call.id, "You are banned!", show_alert=True)
+            bot.answer_callback_query(call.id, "🔴 أنت محظور!", show_alert=True)
             return
         if data == "cancel":
             Utilities.set_cancel(uid, True)
             bot.answer_callback_query(call.id, Utilities.get_text(uid, 'cancel'))
             u = users.get(str(uid), {})
             vip = Utilities.is_user_pro(uid)
-            rank = 'VIP' if vip else 'Free'
+            rank = 'VIP' if vip else 'مجاني'
             text = Utilities.get_text(uid, 'main_menu_rank', rank=rank) + '\n' + Utilities.get_text(uid, 'main_menu_points', points=u.get('points', 0))
             Utilities.edit_message(call, uid, Utilities.format_border(uid, 'main_menu_title', text), build_main_keyboard(uid))
             return
@@ -1168,7 +1848,7 @@ def handle_callback(call):
                                           build_language_keyboard(uid))
                     return
                 vip = Utilities.is_user_pro(uid)
-                rank = 'VIP' if vip else 'Free'
+                rank = 'VIP' if vip else 'مجاني'
                 text = Utilities.get_text(uid, 'main_menu_rank', rank=rank) + '\n' + Utilities.get_text(uid, 'main_menu_points', points=u.get('points', 0))
                 Utilities.edit_message(call, uid, Utilities.format_border(uid, 'main_menu_title', text), build_main_keyboard(uid))
             else:
@@ -1207,7 +1887,7 @@ def handle_callback(call):
         if data == "nav_main":
             u = users.get(str(uid), {})
             vip = Utilities.is_user_pro(uid)
-            rank = 'VIP' if vip else 'Free'
+            rank = 'VIP' if vip else 'مجاني'
             text = Utilities.get_text(uid, 'main_menu_rank', rank=rank) + '\n' + Utilities.get_text(uid, 'main_menu_points', points=u.get('points', 0))
             Utilities.edit_message(call, uid, Utilities.format_border(uid, 'main_menu_title', text), build_main_keyboard(uid))
         elif data == "nav_settings":
@@ -1220,8 +1900,23 @@ def handle_callback(call):
             if not Utilities.is_user_pro(uid):
                 bot.answer_callback_query(call.id, Utilities.get_text(uid, 'vip_only'), show_alert=True)
                 return
-            Utilities.edit_message(call, uid, Utilities.format_border(uid, 'pro_panel', 'Pro Panel - exclusive features for VIP subscribers.'), build_pro_keyboard(uid))
+            Utilities.edit_message(call, uid, Utilities.format_border(uid, 'pro_panel', '👑 لوحة Pro - مميزات حصرية للمشتركين VIP.'), build_pro_keyboard(uid))
         elif data == "pro_download_all":
+            if not Utilities.is_user_pro(uid):
+                bot.answer_callback_query(call.id, Utilities.get_text(uid, 'vip_only'), show_alert=True)
+                return
+            files = DatabaseManager.get_files()
+            u_files = {fid: f for fid, f in files.items() if f.get('user_id') == uid and f.get('status') == 'active'}
+            if not u_files:
+                bot.answer_callback_query(call.id, Utilities.get_text(uid, 'no_files'), show_alert=True)
+                return
+            kb = types.InlineKeyboardMarkup(row_width=1)
+            for fid, f in u_files.items():
+                kb.add(Utilities.create_button(f"📄 {f.get('file_name', '?')[:30]}", f"dl_specific_{fid}", uid))
+            kb.add(Utilities.create_button(Utilities.get_text(uid, 'download_all'), "pro_download_all_zip", uid))
+            kb.add(Utilities.create_button(Utilities.get_text(uid, 'back'), "nav_pro", uid))
+            Utilities.edit_message(call, uid, Utilities.format_border(uid, 'download_specific', 'choose_file_download'), kb)
+        elif data == "pro_download_all_zip":
             if not Utilities.is_user_pro(uid):
                 bot.answer_callback_query(call.id, Utilities.get_text(uid, 'vip_only'), show_alert=True)
                 return
@@ -1235,19 +1930,23 @@ def handle_callback(call):
                 if Utilities.verify_file_access(fid, uid):
                     content = EncryptionManager.load_encrypted_file(fid)
                     if content:
-                        temp_path = os.path.join(TEMP_DIR, f"temp_{fid}_{Utilities.gen_id(4)}.py")
+                        original_name = u_files[fid].get('file_name', f'{fid}.py')
+                        temp_path = os.path.join(TEMP_DIR, f"{original_name}")
                         with open(temp_path, 'w', encoding='utf-8') as f:
                             f.write(content)
-                        decrypted_files.append(temp_path)
+                        decrypted_files.append((temp_path, original_name))
             if decrypted_files:
                 zip_name = f"files_{uid}_{Utilities.gen_id(4)}.zip"
-                zip_path = Utilities.create_zip(decrypted_files, zip_name)
+                zip_path = os.path.join(TEMP_DIR, zip_name)
+                with zipfile.ZipFile(zip_path, 'w') as zipf:
+                    for temp_path, arc_name in decrypted_files:
+                        zipf.write(temp_path, arc_name)
                 try:
                     with open(zip_path, 'rb') as f:
-                        bot.send_document(cid, f, caption="Your files archive")
-                    for temp_file in decrypted_files:
+                        bot.send_document(cid, f, caption="📦 أرشيف ملفاتك")
+                    for temp_path, _ in decrypted_files:
                         try:
-                            os.remove(temp_file)
+                            os.remove(temp_path)
                         except:
                             pass
                     os.remove(zip_path)
@@ -1255,11 +1954,41 @@ def handle_callback(call):
                     bot.answer_callback_query(call.id, Utilities.get_text(uid, 'download_failed'), show_alert=True)
             else:
                 bot.answer_callback_query(call.id, Utilities.get_text(uid, 'no_files_to_download'), show_alert=True)
+        elif data.startswith("dl_specific_"):
+            fid = data.split("_")[2]
+            if not Utilities.verify_file_access(fid, uid):
+                bot.answer_callback_query(call.id, Utilities.get_text(uid, 'access_denied'), show_alert=True)
+                return
+            files = DatabaseManager.get_files()
+            if fid not in files:
+                bot.answer_callback_query(call.id, Utilities.get_text(uid, 'file_not_found'))
+                return
+            content = EncryptionManager.load_encrypted_file(fid)
+            if not content:
+                bot.answer_callback_query(call.id, Utilities.get_text(uid, 'download_failed'), show_alert=True)
+                return
+            try:
+                original_name = files[fid].get('file_name', f'{fid}.py')
+                temp_path = os.path.join(TEMP_DIR, original_name)
+                with open(temp_path, 'w', encoding='utf-8') as f:
+                    f.write(content)
+                thumb = Utilities.get_thumb()
+                with open(temp_path, 'rb') as f:
+                    if thumb:
+                        with open(thumb, 'rb') as t:
+                            bot.send_document(cid, f, thumb=t, caption=f"📄 {original_name}", parse_mode="HTML")
+                    else:
+                        bot.send_document(cid, f, caption=f"📄 {original_name}", parse_mode="HTML")
+                os.remove(temp_path)
+                bot.answer_callback_query(call.id, Utilities.get_text(uid, 'downloaded'))
+            except Exception as e:
+                print(f"Download error: {e}")
+                bot.answer_callback_query(call.id, Utilities.get_text(uid, 'download_failed'), show_alert=True)
         elif data == "pro_auto_fix":
             if not Utilities.is_user_pro(uid):
                 bot.answer_callback_query(call.id, Utilities.get_text(uid, 'vip_only'), show_alert=True)
                 return
-            m = bot.send_message(cid, Utilities.format_border(uid, 'auto_fix', 'Send a .py file to analyze and fix:'), reply_markup=build_cancel_keyboard(uid))
+            m = bot.send_message(cid, Utilities.format_border(uid, 'auto_fix', '🔧 أرسل ملف .py لتحليله وإصلاحه:'), reply_markup=build_cancel_keyboard(uid))
             Utilities.save_message(cid, m.message_id)
             bot.register_next_step_handler(m, auto_fix_step, m.message_id, uid)
         elif data == "pro_test_run":
@@ -1273,7 +2002,7 @@ def handle_callback(call):
                 return
             kb = types.InlineKeyboardMarkup(row_width=1)
             for fid, f in u_files.items():
-                kb.add(Utilities.create_button(f"{f.get('file_name', '?')[:25]}", f"testrun_{fid}", uid))
+                kb.add(Utilities.create_button(f"📄 {f.get('file_name', '?')[:25]}", f"testrun_{fid}", uid))
             kb.add(Utilities.create_button(Utilities.get_text(uid, 'back'), "nav_pro", uid))
             Utilities.edit_message(call, uid, Utilities.format_border(uid, 'test_run', Utilities.get_text(uid, 'test_run_select')), kb)
         elif data.startswith("testrun_"):
@@ -1300,17 +2029,17 @@ def handle_callback(call):
         elif data == "nav_wallet":
             u = users.get(str(uid), {})
             vip = Utilities.is_user_pro(uid)
-            exp = "None"
+            exp = "لا يوجد"
             if vip:
                 e = u.get('expiry')
                 if e == 'LIFETIME' or e == 0:
-                    exp = "Lifetime"
+                    exp = "مدى الحياة"
                 elif e:
                     exp = e
             today = str(datetime.now().date())
             can_claim = u.get('last_daily') != today
             text = (Utilities.get_text(uid, 'balance', balance=u.get('points', 0)) + '\n' +
-                    Utilities.get_text(uid, 'rank', rank='VIP' if vip else 'Free') + '\n' +
+                    Utilities.get_text(uid, 'rank', rank='VIP' if vip else 'مجاني') + '\n' +
                     Utilities.get_text(uid, 'vip_expiry', expiry=exp) + '\n\n' +
                     Utilities.get_text(uid, 'points_info'))
             kb = types.InlineKeyboardMarkup(row_width=2)
@@ -1333,7 +2062,7 @@ def handle_callback(call):
             bot.answer_callback_query(call.id, Utilities.get_text(uid, 'daily_earned', points=gift), show_alert=True)
             vip = Utilities.is_user_pro(uid)
             text = (Utilities.get_text(uid, 'balance', balance=u.get('points', 0)) + '\n' +
-                    Utilities.get_text(uid, 'rank', rank='VIP' if vip else 'Free') + '\n' +
+                    Utilities.get_text(uid, 'rank', rank='VIP' if vip else 'مجاني') + '\n' +
                     Utilities.get_text(uid, 'daily_earned', points=gift))
             kb = types.InlineKeyboardMarkup(row_width=2)
             kb.add(
@@ -1390,7 +2119,7 @@ def handle_callback(call):
             for fid, f in u_files.items():
                 running = fid in active_processes and active_processes[fid].poll() is None
                 icon = "🟢" if running else "🔴"
-                ft = "VIP" if f.get('type') == 'pro' else "Free"
+                ft = "VIP" if f.get('type') == 'pro' else "مجاني"
                 kb.add(Utilities.create_button(f"{icon} {ft} {f.get('file_name', '?')[:25]}", f"manage_{fid}", uid))
             if Utilities.is_user_pro(uid):
                 kb.add(Utilities.create_button(Utilities.get_text(uid, 'download_all'), "pro_download_all", uid))
@@ -1440,6 +2169,18 @@ def handle_callback(call):
             bot.register_next_step_handler(m, token_step, fid, m.message_id, uid)
         elif data.startswith("tokinfo_"):
             token_info(call, data.split("_")[1], uid)
+        elif data.startswith("extend_"):
+            fid = data.split("_")[1]
+            try:
+                bot.delete_message(cid, call.message.message_id)
+            except:
+                pass
+            m = bot.send_message(cid, Utilities.format_border(uid, 'extend_time', Utilities.get_text(uid, 'extend_prompt')), reply_markup=build_cancel_keyboard(uid))
+            Utilities.save_message(cid, m.message_id)
+            bot.register_next_step_handler(m, extend_step, fid, m.message_id, uid)
+        elif data.startswith("preview_"):
+            fid = data.split("_")[1]
+            preview_code(call, fid, uid)
         elif data == "nav_store":
             store_view(call, uid)
         elif data.startswith("buy_"):
@@ -1460,22 +2201,22 @@ def handle_callback(call):
             u_files = [f for f in files.values() if f.get('user_id') == uid and f.get('status') == 'active']
             running = sum(1 for fid, f in files.items() if f.get('user_id') == uid and fid in active_processes and active_processes[fid].poll() is None)
             vip = Utilities.is_user_pro(uid)
-            exp = "None"
+            exp = "لا يوجد"
             if vip:
                 e = u.get('expiry')
                 if e == 'LIFETIME' or e == 0:
-                    exp = "Lifetime"
+                    exp = "مدى الحياة"
                 elif e:
                     try:
                         ed = datetime.strptime(e, "%Y-%m-%d %H:%M:%S")
                         rem = ed - datetime.now()
-                        exp = f"{rem.days} days"
+                        exp = f"{rem.days} يوم"
                     except:
                         exp = e
             text = (Utilities.get_text(uid, 'user_id', id=uid) + '\n' +
                     Utilities.get_text(uid, 'user_username', username=u.get('username', 'None')) + '\n' +
                     Utilities.get_text(uid, 'user_joined', date=u.get('join_date', '?')) + '\n\n' +
-                    Utilities.get_text(uid, 'rank', rank='VIP' if vip else 'Free') + '\n' +
+                    Utilities.get_text(uid, 'rank', rank='VIP' if vip else 'مجاني') + '\n' +
                     Utilities.get_text(uid, 'vip_expiry', expiry=exp) + '\n' +
                     Utilities.get_text(uid, 'balance', balance=u.get('points', 0)) + '\n\n' +
                     Utilities.get_text(uid, 'files_count', count=len(u_files)) + '\n' +
@@ -1491,7 +2232,7 @@ def handle_callback(call):
             settings['bot_locked'] = new_state
             DatabaseManager.save_settings(settings)
             st = Utilities.get_text(uid, 'locked') if new_state else Utilities.get_text(uid, 'unlocked')
-            bot.answer_callback_query(call.id, f"Bot {st}")
+            bot.answer_callback_query(call.id, f"🔒 البوت {st}")
             admin_panel(call, uid)
         elif data == "adm_users" and Utilities.is_admin(uid):
             users_panel(call, uid)
@@ -1656,7 +2397,7 @@ def handle_callback(call):
             settings['auto_approve'] = new_state
             DatabaseManager.save_settings(settings)
             st = Utilities.get_text(uid, 'enabled') if new_state else Utilities.get_text(uid, 'disabled')
-            bot.answer_callback_query(call.id, f"Auto-approve {st}")
+            bot.answer_callback_query(call.id, f"✅ الموافقة التلقائية {st}")
             settings_panel(call, uid)
         elif data == "adm_files" and Utilities.is_admin(uid):
             all_files_panel(call, uid)
@@ -1673,19 +2414,23 @@ def handle_callback(call):
                 if Utilities.verify_file_access(fid, ADMIN_ID):
                     content = EncryptionManager.load_encrypted_file(fid)
                     if content:
-                        temp_path = os.path.join(TEMP_DIR, f"temp_{fid}_{Utilities.gen_id(4)}.py")
+                        original_name = all_files[fid].get('file_name', f'{fid}.py')
+                        temp_path = os.path.join(TEMP_DIR, original_name)
                         with open(temp_path, 'w', encoding='utf-8') as f:
                             f.write(content)
-                        decrypted_files.append(temp_path)
+                        decrypted_files.append((temp_path, original_name))
             if decrypted_files:
                 zip_name = f"all_files_{Utilities.gen_id(4)}.zip"
-                zip_path = Utilities.create_zip(decrypted_files, zip_name)
+                zip_path = os.path.join(TEMP_DIR, zip_name)
+                with zipfile.ZipFile(zip_path, 'w') as zipf:
+                    for temp_path, arc_name in decrypted_files:
+                        zipf.write(temp_path, arc_name)
                 try:
                     with open(zip_path, 'rb') as f:
-                        bot.send_document(cid, f, caption="All bot files")
-                    for temp_file in decrypted_files:
+                        bot.send_document(cid, f, caption="📦 جميع ملفات البوتات")
+                    for temp_path, _ in decrypted_files:
                         try:
-                            os.remove(temp_file)
+                            os.remove(temp_path)
                         except:
                             pass
                     os.remove(zip_path)
@@ -1693,15 +2438,47 @@ def handle_callback(call):
                     bot.answer_callback_query(call.id, Utilities.get_text(uid, 'download_failed'), show_alert=True)
             else:
                 bot.answer_callback_query(call.id, Utilities.get_text(uid, 'no_files_to_download'), show_alert=True)
+        # ─── ميزات الأدمن الجديدة ───
+        elif data == "adm_gifts" and Utilities.is_admin(uid):
+            gifts_panel(call, uid)
+        elif data == "gift_all" and Utilities.is_admin(uid):
+            try:
+                bot.delete_message(cid, call.message.message_id)
+            except:
+                pass
+            m = bot.send_message(cid, Utilities.format_border(uid, 'gifts_title', Utilities.get_text(uid, 'gift_points_prompt')), reply_markup=build_cancel_keyboard(uid, "cancel_admin"))
+            Utilities.save_message(cid, m.message_id)
+            bot.register_next_step_handler(m, gift_all_step, m.message_id, uid)
+        elif data == "gift_user" and Utilities.is_admin(uid):
+            try:
+                bot.delete_message(cid, call.message.message_id)
+            except:
+                pass
+            m = bot.send_message(cid, Utilities.format_border(uid, 'gifts_title', "🆜 أدخل معرف المستخدم ثم النقاط (مثال: 123456789 50):"), reply_markup=build_cancel_keyboard(uid, "cancel_admin"))
+            Utilities.save_message(cid, m.message_id)
+            bot.register_next_step_handler(m, gift_user_step, m.message_id, uid)
+        elif data == "adm_system_usage" and Utilities.is_admin(uid):
+            show_system_usage(call, uid)
+        elif data.startswith("stopbotadmin_") and Utilities.is_admin(uid):
+            fid = data.split("_")[1]
+            try:
+                bot.delete_message(cid, call.message.message_id)
+            except:
+                pass
+            m = bot.send_message(cid, Utilities.format_border(uid, 'stop_bot_admin', Utilities.get_text(uid, 'enter_stop_reason')), reply_markup=build_cancel_keyboard(uid, "cancel_admin"))
+            Utilities.save_message(cid, m.message_id)
+            bot.register_next_step_handler(m, stop_bot_admin_step, fid, m.message_id, uid)
     except Exception as e:
         print(f"Callback error: {e}")
 
+
+# ─── دوال اللوحات والمعالجات ───
 def settings_panel(call, uid):
     settings = DatabaseManager.get_settings()
     has_img = "✅" if settings.get('bot_image') else "❌"
     has_thumb = "✅" if settings.get('file_thumb') and os.path.exists(settings.get('file_thumb', '')) else "❌"
     auto_approve = "✅" if settings.get('auto_approve', True) else "❌"
-    text = (Utilities.get_text(uid, 'bot_name', name=settings.get('bot_name', 'Not set')) + '\n' +
+    text = (Utilities.get_text(uid, 'bot_name', name=settings.get('bot_name', 'غير محدد')) + '\n' +
             Utilities.get_text(uid, 'bot_image', state=has_img) + '\n' +
             Utilities.get_text(uid, 'file_thumb', state=has_thumb) + '\n' +
             Utilities.get_text(uid, 'auto_approve', state=auto_approve))
@@ -1724,10 +2501,10 @@ def auto_fix_step(msg, prompt_id, uid):
         with open(temp_path, 'w', encoding='utf-8') as f:
             f.write(fixed_content)
         with open(temp_path, 'rb') as f:
-            bot.send_document(msg.chat.id, f, caption="Fixed file")
+            bot.send_document(msg.chat.id, f, caption="🔧 الملف المُصلح")
         os.remove(temp_path)
     except Exception as e:
-        Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'error', f"Fix failed: {str(e)[:200]}"), build_back_keyboard(uid, "nav_pro"))
+        Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'error', f"🔧 فشل الإصلاح: {str(e)[:200]}"), build_back_keyboard(uid, "nav_pro"))
 
 def sell_file_step(msg, prompt_id, uid):
     if Utilities.is_cancelled(uid):
@@ -1760,14 +2537,14 @@ def sell_price_step(msg, doc, prompt_id, uid):
         'rating': 0,
         'votes': 0,
         'downloads': 0,
-        'category': 'General',
+        'category': 'عام',
         'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     }
     DatabaseManager.save_market(market)
     finfo = bot.get_file(doc.file_id)
     with open(os.path.join(MARKET_DIR, f"{sid}.py"), 'wb') as f:
         f.write(bot.download_file(finfo.file_path))
-    Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'success', f"File listed for sale!\n{doc.file_name}\nPrice: {price} points"), build_back_keyboard(uid, "nav_pro"))
+    Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'success', f"✅ تم عرض الملف للبيع!\n📄 {doc.file_name}\n💰 السعر: {price} نقطة"), build_back_keyboard(uid, "nav_pro"))
 
 def store_view(call, uid):
     store = DatabaseManager.get_store()
@@ -1776,7 +2553,7 @@ def store_view(call, uid):
         return
     kb = types.InlineKeyboardMarkup(row_width=2)
     for sid, item in store.items():
-        kb.add(Utilities.create_button(f"{item['name'][:15]} • {item['price']}pt", f"buy_{sid}", uid))
+        kb.add(Utilities.create_button(f"📄 {item['name'][:15]} • {item['price']}نق", f"buy_{sid}", uid))
     kb.add(Utilities.create_button(Utilities.get_text(uid, 'back'), "nav_main", uid))
     users = DatabaseManager.get_users()
     text = Utilities.get_text(uid, 'store') + '\n\n' + Utilities.get_text(uid, 'balance', balance=users.get(str(uid), {}).get('points', 0))
@@ -1819,9 +2596,9 @@ def buy_execute(call, sid, uid):
         with open(path, 'rb') as f:
             if thumb:
                 with open(thumb, 'rb') as t:
-                    bot.send_document(uid, f, thumb=t, caption=f"Purchased: {item['name']}", parse_mode="HTML")
+                    bot.send_document(uid, f, thumb=t, caption=f"✅ تم الشراء: {item['name']}", parse_mode="HTML")
             else:
-                bot.send_document(uid, f, caption=f"Purchased: {item['name']}", parse_mode="HTML")
+                bot.send_document(uid, f, caption=f"✅ تم الشراء: {item['name']}", parse_mode="HTML")
         bot.answer_callback_query(call.id, Utilities.get_text(uid, 'purchase_success'))
         store_view(call, uid)
     except:
@@ -1860,6 +2637,10 @@ def admin_panel(call, uid):
         Utilities.create_button(Utilities.get_text(uid, 'all_files'), "adm_files", uid),
         Utilities.create_button(Utilities.get_text(uid, 'stop_all'), "stop_all", uid)
     )
+    kb.row(
+        Utilities.create_button("🎁 " + Utilities.get_text(uid, 'gifts_title'), "adm_gifts", uid),
+        Utilities.create_button(Utilities.get_text(uid, 'view_system_usage'), "adm_system_usage", uid)
+    )
     kb.add(Utilities.create_button(Utilities.get_text(uid, 'settings'), "adm_settings", uid))
     kb.add(Utilities.create_button(Utilities.get_text(uid, 'back'), "nav_main", uid))
     Utilities.edit_message(call, uid, Utilities.format_border(uid, 'admin_panel_title', text), kb)
@@ -1876,7 +2657,7 @@ def users_panel(call, uid, page=0):
     for uid_iter in page_users:
         u = users[uid_iter]
         name = u.get('first_name', 'Unknown')
-        kb.add(Utilities.create_button(f"{name[:10]}", f"uctrl_{uid_iter}", uid))
+        kb.add(Utilities.create_button(f"👤 {name[:10]}", f"uctrl_{uid_iter}", uid))
     nav_buttons = []
     if page > 0:
         nav_buttons.append(Utilities.create_button(Utilities.get_text(uid, 'previous'), f"userpage_{page-1}", uid))
@@ -1885,7 +2666,7 @@ def users_panel(call, uid, page=0):
     if nav_buttons:
         kb.row(*nav_buttons)
     kb.add(Utilities.create_button(Utilities.get_text(uid, 'back'), "nav_admin", uid))
-    text = f"Page {page+1} of {total_pages}\nTotal users: {len(users)}"
+    text = f"📄 صفحة {page+1} من {total_pages}\n👥 إجمالي المستخدمين: {len(users)}"
     Utilities.edit_message(call, uid, Utilities.format_border(uid, 'users_list', text), kb)
 
 def all_files_panel(call, uid, page=0):
@@ -1899,7 +2680,7 @@ def all_files_panel(call, uid, page=0):
     kb = types.InlineKeyboardMarkup(row_width=2)
     for fid in page_files:
         f = files[fid]
-        kb.add(Utilities.create_button(f"{f.get('file_name', '?')[:15]}", f"afile_{fid}", uid))
+        kb.add(Utilities.create_button(f"📄 {f.get('file_name', '?')[:15]}", f"afile_{fid}", uid))
     nav_buttons = []
     if page > 0:
         nav_buttons.append(Utilities.create_button(Utilities.get_text(uid, 'previous'), f"afpage_{page-1}", uid))
@@ -1909,7 +2690,7 @@ def all_files_panel(call, uid, page=0):
         kb.row(*nav_buttons)
     kb.add(Utilities.create_button(Utilities.get_text(uid, 'download_all'), "download_all_files", uid))
     kb.add(Utilities.create_button(Utilities.get_text(uid, 'back'), "nav_admin", uid))
-    text = f"Page {page+1} of {total_pages}\nTotal files: {len(files)}"
+    text = f"📄 صفحة {page+1} من {total_pages}\n📁 إجمالي الملفات: {len(files)}"
     Utilities.edit_message(call, uid, Utilities.format_border(uid, 'all_files', text), kb)
 
 def file_panel_admin(call, fid, uid):
@@ -1919,19 +2700,25 @@ def file_panel_admin(call, fid, uid):
         return
     f = files[fid]
     content = EncryptionManager.load_encrypted_file(fid)
-    preview = "Access denied"
+    preview = "🚫 ممنوع الوصول"
     if content:
         safe = escape(content[:1000])
         if len(safe) > 3000:
             safe = safe[:3000] + "\n..."
         preview = f"<pre><code class='language-python'>{safe}</code></pre>"
     running = fid in active_processes and active_processes[fid].poll() is None
+    # التحقق من سبب الإيقاف
+    stop_reasons = DatabaseManager.get_stop_reasons()
+    reason_text = ""
+    if fid in stop_reasons:
+        reason_text = f"\n🛑 السبب: {stop_reasons[fid].get('reason', 'غير معروف')}"
     text = (Utilities.get_text(uid, 'file', name=f.get('file_name')) + '\n' +
             Utilities.get_text(uid, 'user_id', id=f.get('user_id')) + '\n' +
-            Utilities.get_text(uid, 'file_type', type='VIP' if f.get('type') == 'pro' else 'Free') + '\n' +
+            Utilities.get_text(uid, 'file_type', type='VIP' if f.get('type') == 'pro' else 'مجاني') + '\n' +
             Utilities.get_text(uid, 'file_status', status=Utilities.get_text(uid, 'running') if running else Utilities.get_text(uid, 'stopped')) + '\n' +
-            Utilities.get_text(uid, 'file_created', created=f.get('created_at')) + '\n\nPreview:\n' + preview)
-    kb = types.InlineKeyboardMarkup()
+            Utilities.get_text(uid, 'file_created', created=f.get('created_at')) + reason_text + '\n\n👁️ المعاينة:\n' + preview)
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    kb.add(Utilities.create_button("🛑 إيقاف + سبب", f"stopbotadmin_{fid}", uid))
     kb.add(Utilities.create_button(Utilities.get_text(uid, 'back'), "afpage_0", uid))
     Utilities.edit_message(call, uid, Utilities.format_border(uid, 'file', text), kb)
 
@@ -1948,11 +2735,11 @@ def admins_panel(call, uid):
             owner = "👑" if aid == ADMIN_ID else "👮"
             text += f"{owner} {escape(name)} - <code>{aid}</code>\n"
             if aid != ADMIN_ID and Utilities.is_main_admin(uid):
-                kb.add(Utilities.create_button(f"Remove {name[:10]}", f"rmadmin_{aid}", uid))
+                kb.add(Utilities.create_button(f"❌ إزالة {name[:10]}", f"rmadmin_{aid}", uid))
         except:
             text += f"👮 <code>{aid}</code>\n"
             if aid != ADMIN_ID and Utilities.is_main_admin(uid):
-                kb.add(Utilities.create_button(f"Remove {aid}", f"rmadmin_{aid}", uid))
+                kb.add(Utilities.create_button(f"❌ إزالة {aid}", f"rmadmin_{aid}", uid))
     if not Utilities.is_main_admin(uid):
         text += "\n\n" + Utilities.get_text(uid, 'only_owner')
     kb.add(Utilities.create_button(Utilities.get_text(uid, 'back'), "nav_admin", uid))
@@ -1972,7 +2759,7 @@ def add_admin_step(msg, prompt_id, uid):
     new_id = int(msg.text.strip())
     if Utilities.add_admin(new_id):
         try:
-            bot.send_message(new_id, Utilities.format_border(new_id, 'admin_promoted_notify', 'You have been made an admin!'))
+            bot.send_message(new_id, Utilities.format_border(new_id, 'admin_promoted_notify', '👮 لقد تم تعيينك أدمن!'))
         except:
             pass
         Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'success', Utilities.get_text(uid, 'admin_added', id=new_id)), build_back_keyboard(uid, "adm_admins"))
@@ -1986,11 +2773,11 @@ def user_panel(call, tuid, uid):
         return
     banned = u.get('is_banned', 0) == 1
     vip = Utilities.is_user_pro(int(tuid))
-    exp = "None"
+    exp = "لا يوجد"
     if vip:
         e = u.get('expiry')
         if e == 'LIFETIME' or e == 0:
-            exp = "Lifetime"
+            exp = "مدى الحياة"
         elif e:
             exp = e
     files = DatabaseManager.get_files()
@@ -1999,7 +2786,7 @@ def user_panel(call, tuid, uid):
             Utilities.get_text(uid, 'user_username', username=u.get('username', 'None')) + '\n' +
             Utilities.get_text(uid, 'user_joined', date=u.get('join_date', '?')) + '\n\n' +
             Utilities.get_text(uid, 'balance', balance=u.get('points', 0)) + '\n' +
-            Utilities.get_text(uid, 'rank', rank='VIP' if vip else 'Free') + '\n' +
+            Utilities.get_text(uid, 'rank', rank='VIP' if vip else 'مجاني') + '\n' +
             Utilities.get_text(uid, 'vip_expiry', expiry=exp) + '\n\n' +
             Utilities.get_text(uid, 'files_count', count=len(u_files)) + '\n' +
             Utilities.get_text(uid, 'user_status', status=Utilities.get_text(uid, 'banned') if banned else Utilities.get_text(uid, 'active')))
@@ -2029,7 +2816,7 @@ def charge_step(msg, tuid, prompt_id, uid):
         users[str(tuid)]['points'] = users[str(tuid)].get('points', 0) + amount
         DatabaseManager.save_users(users)
         try:
-            bot.send_message(int(tuid), Utilities.format_border(int(tuid), 'points_added_notify', f"<b>{amount}</b> points have been added to your balance."))
+            bot.send_message(int(tuid), Utilities.format_border(int(tuid), 'points_added_notify', f"💰 تم إضافة <b>{amount}</b> نقاط إلى رصيدك."))
         except:
             pass
         Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'success', Utilities.get_text(uid, 'charge_success', amount=amount)), build_back_keyboard(uid, f"uctrl_{tuid}"))
@@ -2042,7 +2829,8 @@ def message_user_step(msg, tuid, prompt_id, uid):
     try:
         bot.copy_message(int(tuid), msg.chat.id, msg.message_id)
         Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'success', Utilities.get_text(uid, 'message_sent')), build_back_keyboard(uid, f"uctrl_{tuid}"))
-    except:
+    except Exception as e:
+        print(f"Message send error: {e}")
         Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'error', Utilities.get_text(uid, 'failed')), build_back_keyboard(uid, f"uctrl_{tuid}"))
 
 def pro_grant_step(msg, tuid, prompt_id, uid):
@@ -2058,14 +2846,14 @@ def pro_grant_step(msg, tuid, prompt_id, uid):
     if str(tuid) in users:
         if days == 0:
             users[str(tuid)]['expiry'] = 'LIFETIME'
-            exp_text = "Lifetime"
+            exp_text = "مدى الحياة"
         else:
             exp_date = datetime.now() + timedelta(days=days)
             users[str(tuid)]['expiry'] = exp_date.strftime("%Y-%m-%d %H:%M:%S")
-            exp_text = f"{days} days"
+            exp_text = f"{days} يوم"
         DatabaseManager.save_users(users)
         try:
-            bot.send_message(int(tuid), Utilities.format_border(int(tuid), 'vip_granted_notify', f"You have been upgraded to VIP for {exp_text}."))
+            bot.send_message(int(tuid), Utilities.format_border(int(tuid), 'vip_granted_notify', f"👑 تم ترقيتك إلى VIP لمدة {exp_text}."))
         except:
             pass
         Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'success', Utilities.get_text(uid, 'grant_vip_success', duration=exp_text)), build_back_keyboard(uid, f"uctrl_{tuid}"))
@@ -2103,7 +2891,7 @@ def store_panel(call, uid):
     kb = types.InlineKeyboardMarkup(row_width=1)
     kb.add(Utilities.create_button(Utilities.get_text(uid, 'add_store_file'), "add_store", uid))
     for sid, item in store.items():
-        kb.add(Utilities.create_button(f"{item['name'][:20]} • {item['price']}pt", f"estore_{sid}", uid))
+        kb.add(Utilities.create_button(f"📄 {item['name'][:20]} • {item['price']}نق", f"estore_{sid}", uid))
     kb.add(Utilities.create_button(Utilities.get_text(uid, 'back'), "nav_admin", uid))
     text = Utilities.get_text(uid, 'store_management') + f": {len(store)}"
     Utilities.edit_message(call, uid, Utilities.format_border(uid, 'store_management', text), kb)
@@ -2178,6 +2966,8 @@ def store_delete(call, sid, uid):
         bot.answer_callback_query(call.id, Utilities.get_text(uid, 'store_deleted', name=name))
         store_panel(call, uid)
 
+
+# ─── معالجات الرفع والملفات ───
 def upload_step(msg, h_type, prompt_id, uid):
     if Utilities.is_cancelled(uid):
         Utilities.clear_cancel(uid)
@@ -2222,6 +3012,10 @@ def complete_upload(doc, user_id, h_type, hours, uid):
     fid = Utilities.gen_id()
     finfo = bot.get_file(doc.file_id)
     file_content = bot.download_file(finfo.file_path).decode('utf-8')
+
+    # ─── التثبيت الذكي للمكتبات ───
+    install_results = SmartInstaller.install_libraries(file_content, fid)
+
     if not EncryptionManager.save_encrypted_file(fid, file_content, user_id):
         Utilities.send_message(user_id, uid, Utilities.format_border(uid, 'error', Utilities.get_text(uid, 'save_failed')), build_back_keyboard(uid))
         return
@@ -2246,18 +3040,22 @@ def complete_upload(doc, user_id, h_type, hours, uid):
                 process_hours[fid] = hours
         DatabaseManager.save_files(files)
         ProcessManager.start_script(fid)
-        duration = str(hours) + ' hour(s)' if h_type == 'free' else 'Unlimited'
+        duration = str(hours) + ' ساعة' if h_type == 'free' else 'غير محدود'
         text = Utilities.get_text(uid, 'file_accepted', name=doc.file_name, duration=duration)
+        # إضافة نتائج التثبيت الذكي
+        if install_results:
+            installed = ", ".join(install_results['installed']) if install_results['installed'] else "لا يوجد"
+            text += f"\n\n📚 المكتبات المثبتة: {installed}"
         Utilities.send_message(user_id, uid, Utilities.format_border(uid, 'accepted', text), build_back_keyboard(uid))
     else:
-        duration = str(hours) + ' hour(s)' if h_type == 'free' else ''
-        text = Utilities.get_text(uid, 'file_uploaded', name=doc.file_name, type='VIP' if h_type == 'pro' else 'Free', duration=duration)
+        duration = str(hours) + ' ساعة' if h_type == 'free' else ''
+        text = Utilities.get_text(uid, 'file_uploaded', name=doc.file_name, type='VIP' if h_type == 'pro' else 'مجاني', duration=duration)
         Utilities.send_message(user_id, uid, Utilities.format_border(uid, 'pending_review', text), build_back_keyboard(uid))
     try:
         user = bot.get_chat(user_id)
         admin_text = Utilities.get_text(uid, 'file_upload_notify', user=escape(user.first_name), id=user_id,
-                                       file=doc.file_name, type='VIP' if h_type == 'pro' else 'Free',
-                                       duration=str(hours) + ' hour(s)' if h_type == 'free' else '')
+                                       file=doc.file_name, type='VIP' if h_type == 'pro' else 'مجاني',
+                                       duration=str(hours) + ' ساعة' if h_type == 'free' else '')
         for adm in DatabaseManager.get_admins():
             try:
                 bot.send_message(adm, admin_text, parse_mode="HTML")
@@ -2274,7 +3072,7 @@ def pending_list(call, uid):
         return
     kb = types.InlineKeyboardMarkup(row_width=1)
     for fid, f in pending.items():
-        ft = "VIP" if f.get('type') == 'pro' else "Free"
+        ft = "VIP" if f.get('type') == 'pro' else "مجاني"
         kb.add(Utilities.create_button(f"{ft} {f.get('file_name', '?')[:25]}", f"vpend_{fid}", uid))
     kb.add(Utilities.create_button(Utilities.get_text(uid, 'back'), "nav_admin", uid))
     text = Utilities.get_text(uid, 'pending_files') + f": {len(pending)}"
@@ -2287,7 +3085,7 @@ def pending_view(call, fid, uid):
         bot.answer_callback_query(call.id, Utilities.get_text(uid, 'file_not_found'))
         return
     content = EncryptionManager.load_encrypted_file(fid)
-    preview = "Unable to read file"
+    preview = "❌ تعذر قراءة الملف"
     if content:
         safe = escape(content[:1000])
         if len(safe) > 3000:
@@ -2297,13 +3095,13 @@ def pending_view(call, fid, uid):
         uinfo = bot.get_chat(f['user_id'])
         utext = f"{escape(uinfo.first_name)} (@{uinfo.username if uinfo.username else 'None'})"
     except:
-        utext = f"ID: {f['user_id']}"
+        utext = f"🆔: {f['user_id']}"
     text = (Utilities.get_text(uid, 'file', name=f.get('file_name')) + '\n' +
             Utilities.get_text(uid, 'file_owner', owner=utext) + '\n' +
             Utilities.get_text(uid, 'user_id', id=f.get('user_id')) + '\n' +
-            Utilities.get_text(uid, 'file_type', type='VIP' if f.get('type') == 'pro' else 'Free') + '\n' +
-            (Utilities.get_text(uid, 'duration', duration=str(f.get('hours', 0)) + ' hour(s)') if f.get('type') == 'free' else '') + '\n' +
-            Utilities.get_text(uid, 'file_created', created=f.get('created_at')) + '\n\nPreview:\n' + preview)
+            Utilities.get_text(uid, 'file_type', type='VIP' if f.get('type') == 'pro' else 'مجاني') + '\n' +
+            (Utilities.get_text(uid, 'duration', duration=str(f.get('hours', 0)) + ' ساعة') if f.get('type') == 'free' else '') + '\n' +
+            Utilities.get_text(uid, 'file_created', created=f.get('created_at')) + '\n\n👁️ المعاينة:\n' + preview)
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.add(
         Utilities.create_button(Utilities.get_text(uid, 'approve'), f"approve_{fid}", uid),
@@ -2335,7 +3133,7 @@ def approve_file(call, fid, uid):
     DatabaseManager.save_files(files)
     ProcessManager.start_script(fid)
     try:
-        duration = str(hours) + ' hour(s)' if h_type == 'free' else 'Unlimited'
+        duration = str(hours) + ' ساعة' if h_type == 'free' else 'غير محدود'
         text = Utilities.get_text(user_id, 'file_approved', name=files[fid]['file_name'], duration=duration)
         bot.send_message(user_id, Utilities.format_border(user_id, 'approved', text))
     except:
@@ -2381,21 +3179,28 @@ def file_panel(call, fid, uid):
         return
     f = files[fid]
     content = EncryptionManager.load_encrypted_file(fid)
-    preview = "Unable to read file"
+    preview = "❌ تعذر قراءة الملف"
     if content:
         safe = escape(content[:1000])
         if len(safe) > 3000:
             safe = safe[:3000] + "\n..."
         preview = f"<pre><code class='language-python'>{safe}</code></pre>"
     running = fid in active_processes and active_processes[fid].poll() is None
-    hrs = "Unlimited"
+    hrs = "غير محدود"
     if f.get('type') == 'free' and fid in process_hours:
-        hrs = f"{process_hours[fid]} hour(s)"
+        hrs = f"{process_hours[fid]} ساعة"
+
+    # التحقق من سبب الإيقاف
+    stop_reasons = DatabaseManager.get_stop_reasons()
+    reason_text = ""
+    if fid in stop_reasons:
+        reason_text = f"\n🛑 السبب: {stop_reasons[fid].get('reason', 'غير معروف')}"
+
     text = (Utilities.get_text(uid, 'file', name=f.get('file_name')) + '\n' +
-            Utilities.get_text(uid, 'file_type', type='VIP' if f.get('type') == 'pro' else 'Free') + '\n' +
+            Utilities.get_text(uid, 'file_type', type='VIP' if f.get('type') == 'pro' else 'مجاني') + '\n' +
             Utilities.get_text(uid, 'file_status', status=Utilities.get_text(uid, 'running') if running else Utilities.get_text(uid, 'stopped')) + '\n' +
             Utilities.get_text(uid, 'file_remaining', remaining=hrs) + '\n' +
-            Utilities.get_text(uid, 'file_created', created=f.get('created_at')) + '\n\nPreview:\n' + preview)
+            Utilities.get_text(uid, 'file_created', created=f.get('created_at')) + reason_text + '\n\n👁️ المعاينة:\n' + preview)
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.add(
         Utilities.create_button(Utilities.get_text(uid, 'stop') if running else Utilities.get_text(uid, 'start'), f"toggle_{fid}", uid),
@@ -2409,6 +3214,9 @@ def file_panel(call, fid, uid):
         Utilities.create_button(Utilities.get_text(uid, 'download'), f"dl_{fid}", uid),
         Utilities.create_button(Utilities.get_text(uid, 'delete'), f"delc_{fid}", uid)
     )
+    if f.get('type') == 'free':
+        kb.add(Utilities.create_button(Utilities.get_text(uid, 'extend_time_btn'), f"extend_{fid}", uid))
+    kb.add(Utilities.create_button(Utilities.get_text(uid, 'preview_code'), f"preview_{fid}", uid))
     kb.add(Utilities.create_button(Utilities.get_text(uid, 'back'), "nav_files", uid))
     Utilities.edit_message(call, uid, Utilities.format_border(uid, 'file_manager', text), kb)
 
@@ -2460,6 +3268,11 @@ def delete_file(call, fid, uid):
             del file_keys[fid]
             security['file_keys'] = file_keys
             DatabaseManager.save_security(security)
+        # حذف سبب الإيقاف إن وجد
+        stop_reasons = DatabaseManager.get_stop_reasons()
+        if fid in stop_reasons:
+            del stop_reasons[fid]
+            DatabaseManager.save_stop_reasons(stop_reasons)
         del files[fid]
         DatabaseManager.save_files(files)
         bot.answer_callback_query(call.id, Utilities.get_text(uid, 'deleted', name=fname))
@@ -2476,7 +3289,7 @@ def delete_file(call, fid, uid):
         for fid, f in u_files.items():
             running = fid in active_processes and active_processes[fid].poll() is None
             icon = "🟢" if running else "🔴"
-            ft = "VIP" if f.get('type') == 'pro' else "Free"
+            ft = "VIP" if f.get('type') == 'pro' else "مجاني"
             kb.add(Utilities.create_button(f"{icon} {ft} {f.get('file_name', '?')[:25]}", f"manage_{fid}", uid))
         kb.add(Utilities.create_button(Utilities.get_text(uid, 'back'), "nav_main", uid))
         Utilities.edit_message(call, uid, Utilities.format_border(uid, 'my_files_title', Utilities.get_text(uid, 'files_count', count=len(u_files))), kb)
@@ -2494,19 +3307,21 @@ def download_file(call, fid, uid):
         bot.answer_callback_query(call.id, Utilities.get_text(uid, 'download_failed'), show_alert=True)
         return
     try:
-        temp_path = os.path.join(TEMP_DIR, f"temp_{fid}_{Utilities.gen_id(4)}.py")
+        original_name = files[fid].get('file_name', f'{fid}.py')
+        temp_path = os.path.join(TEMP_DIR, original_name)
         with open(temp_path, 'w', encoding='utf-8') as f:
             f.write(content)
         thumb = Utilities.get_thumb()
         with open(temp_path, 'rb') as f:
             if thumb:
                 with open(thumb, 'rb') as t:
-                    bot.send_document(call.message.chat.id, f, thumb=t, caption=f"{files[fid]['file_name']}", parse_mode="HTML")
+                    bot.send_document(call.message.chat.id, f, thumb=t, caption=f"📄 {original_name}", parse_mode="HTML")
             else:
-                bot.send_document(call.message.chat.id, f, caption=f"{files[fid]['file_name']}", parse_mode="HTML")
+                bot.send_document(call.message.chat.id, f, caption=f"📄 {original_name}", parse_mode="HTML")
         os.remove(temp_path)
         bot.answer_callback_query(call.id, Utilities.get_text(uid, 'downloaded'))
-    except:
+    except Exception as e:
+        print(f"Download error: {e}")
         bot.answer_callback_query(call.id, Utilities.get_text(uid, 'download_failed'), show_alert=True)
 
 def terminal(call, fid, uid):
@@ -2586,7 +3401,7 @@ def token_info(call, fid, uid):
         valid, info = Utilities.check_token(token)
         if valid:
             text = Utilities.get_text(uid, 'token_valid') + '\n\n' + \
-                   f"Bot name: {escape(info.get('first_name'))}\nUsername: @{info.get('username')}\nID: <code>{info.get('id')}</code>"
+                   f"🤖 اسم البوت: {escape(info.get('first_name'))}\n👤 المستخدم: @{info.get('username')}\n🆔 المعرف: <code>{info.get('id')}</code>"
         else:
             text = Utilities.get_text(uid, 'token_invalid') + '\n\n' + escape(str(info))
         kb = types.InlineKeyboardMarkup()
@@ -2599,6 +3414,42 @@ def token_info(call, fid, uid):
         Utilities.save_message(call.message.chat.id, m.message_id)
     except:
         bot.answer_callback_query(call.id, Utilities.get_text(uid, 'error'), show_alert=True)
+
+def extend_step(msg, fid, prompt_id, uid):
+    if Utilities.is_cancelled(uid):
+        Utilities.clear_cancel(uid)
+        return
+    Utilities.delete_messages(msg.chat.id, prompt_id, msg.message_id)
+    if not msg.text or not msg.text.strip().isdigit():
+        Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'error', Utilities.get_text(uid, 'invalid_number')), build_back_keyboard(uid, f"manage_{fid}"))
+        return
+    hours = int(msg.text.strip())
+    success, message = Utilities.extend_file_time(fid, hours, uid)
+    if success:
+        Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'success', Utilities.get_text(uid, 'extend_success', message=message)), build_back_keyboard(uid, f"manage_{fid}"))
+    else:
+        Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'error', Utilities.get_text(uid, 'extend_failed', message=message)), build_back_keyboard(uid, f"manage_{fid}"))
+
+def preview_code(call, fid, uid):
+    if not Utilities.verify_file_access(fid, uid):
+        bot.answer_callback_query(call.id, Utilities.get_text(uid, 'access_denied'), show_alert=True)
+        return
+    content = EncryptionManager.load_encrypted_file(fid)
+    if not content:
+        bot.answer_callback_query(call.id, Utilities.get_text(uid, 'file_not_found'), show_alert=True)
+        return
+    safe = escape(content[:3000])
+    if len(safe) > 3000:
+        safe = safe[:3000] + "\n..."
+    text = f"👁️ معاينة الكود:\n\n<pre><code class='language-python'>{safe}</code></pre>"
+    kb = types.InlineKeyboardMarkup()
+    kb.add(Utilities.create_button(Utilities.get_text(uid, 'back'), f"manage_{fid}", uid))
+    try:
+        bot.delete_message(call.message.chat.id, call.message.message_id)
+    except:
+        pass
+    m = bot.send_message(call.message.chat.id, Utilities.format_border(uid, 'preview_code', text), parse_mode="HTML", reply_markup=kb)
+    Utilities.save_message(call.message.chat.id, m.message_id)
 
 def library_step(msg, prompt_id, uid):
     if Utilities.is_cancelled(uid):
@@ -2639,7 +3490,7 @@ def broadcast_step(msg, prompt_id, uid):
                 bot.send_document(int(user_id), msg.document.file_id, caption=msg.caption, parse_mode="HTML")
             success += 1
             time.sleep(0.05)
-        except:
+        except Exception as e:
             failed += 1
     text = Utilities.get_text(uid, 'broadcast_complete', success=success, failed=failed, total=len(uids))
     bot.edit_message_text(Utilities.format_border(uid, 'broadcast', text), msg.chat.id, wait.message_id, parse_mode="HTML", reply_markup=build_back_keyboard(uid, "nav_admin"))
@@ -2650,11 +3501,11 @@ def channels_panel(call, uid):
     kb = types.InlineKeyboardMarkup(row_width=1)
     kb.add(Utilities.create_button(Utilities.get_text(uid, 'add_channel'), "add_channel", uid))
     for i, ch in enumerate(channels):
-        kb.add(Utilities.create_button(f"Remove {ch['name']}", f"delch_{i}", uid))
+        kb.add(Utilities.create_button(f"❌ إزالة {ch['name']}", f"delch_{i}", uid))
     kb.add(Utilities.create_button(Utilities.get_text(uid, 'back'), "nav_admin", uid))
     text = Utilities.get_text(uid, 'channels_list', count=len(channels))
     if channels:
-        text += "\n\n" + "\n".join([f"{ch['name']} ({ch['username']})" for ch in channels])
+        text += "\n\n" + "\n".join([f"📢 {ch['name']} ({ch['username']})" for ch in channels])
     Utilities.edit_message(call, uid, Utilities.format_border(uid, 'channels', text), kb)
 
 def add_channel_step(msg, prompt_id, uid):
@@ -2740,9 +3591,106 @@ def set_thumb_step(msg, prompt_id, uid):
     except:
         Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'error', Utilities.get_text(uid, 'failed')), build_back_keyboard(uid, "adm_settings"))
 
+
+# ─── ميزات الأدمن الجديدة ───
+def gifts_panel(call, uid):
+    text = "🎁 نظام الهدايا والمكافآت\n\nاختر نوع الهدية:"
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    kb.add(
+        Utilities.create_button("🎁 هدية للجميع", "gift_all", uid),
+        Utilities.create_button("🎁 هدية لمستخدم", "gift_user", uid)
+    )
+    kb.add(Utilities.create_button(Utilities.get_text(uid, 'back'), "nav_admin", uid))
+    Utilities.edit_message(call, uid, Utilities.format_border(uid, 'gifts_title', text), kb)
+
+def gift_all_step(msg, prompt_id, uid):
+    if Utilities.is_cancelled(uid):
+        Utilities.clear_cancel(uid)
+        return
+    Utilities.delete_messages(msg.chat.id, prompt_id, msg.message_id)
+    if not msg.text or not msg.text.strip().isdigit():
+        Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'error', Utilities.get_text(uid, 'invalid_number')), build_back_keyboard(uid, "adm_gifts"))
+        return
+    points = int(msg.text.strip())
+    users = DatabaseManager.get_users()
+    count = 0
+    for user_id in users:
+        try:
+            users[user_id]['points'] = users[user_id].get('points', 0) + points
+            count += 1
+            try:
+                bot.send_message(int(user_id), Utilities.format_border(int(user_id), 'user_gift_notify', f"🎁 لقد تلقيت هدية!\n💰 <b>{points}</b> نقاط من الإدارة."))
+            except:
+                pass
+        except:
+            pass
+    DatabaseManager.save_users(users)
+    Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'success', Utilities.get_text(uid, 'gift_sent_all', points=points, count=count)), build_back_keyboard(uid, "adm_gifts"))
+
+def gift_user_step(msg, prompt_id, uid):
+    if Utilities.is_cancelled(uid):
+        Utilities.clear_cancel(uid)
+        return
+    Utilities.delete_messages(msg.chat.id, prompt_id, msg.message_id)
+    parts = msg.text.strip().split()
+    if len(parts) != 2 or not parts[0].isdigit() or not parts[1].isdigit():
+        Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'error', "❌ يرجى إدخال: معرف_المستخدم النقاط"), build_back_keyboard(uid, "adm_gifts"))
+        return
+    target_id = int(parts[0])
+    points = int(parts[1])
+    users = DatabaseManager.get_users()
+    if str(target_id) not in users:
+        Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'error', Utilities.get_text(uid, 'invalid_user_id')), build_back_keyboard(uid, "adm_gifts"))
+        return
+    users[str(target_id)]['points'] = users[str(target_id)].get('points', 0) + points
+    DatabaseManager.save_users(users)
+    try:
+        bot.send_message(target_id, Utilities.format_border(target_id, 'user_gift_notify', f"🎁 لقد تلقيت هدية!\n💰 <b>{points}</b> نقاط من الإدارة."))
+    except:
+        pass
+    Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'success', Utilities.get_text(uid, 'gift_sent_user', points=points)), build_back_keyboard(uid, "adm_gifts"))
+
+def show_system_usage(call, uid):
+    try:
+        cpu = psutil.cpu_percent(interval=1)
+        mem = psutil.virtual_memory()
+        ram_percent = mem.percent
+        ram_mb = mem.used / (1024 * 1024)
+        total_mb = mem.total / (1024 * 1024)
+        active_count = sum(1 for fid in active_processes if active_processes[fid].poll() is None)
+        paused_count = len(paused_bots)
+        text = Utilities.get_text(uid, 'system_usage_current', cpu=cpu, ram=round(ram_percent, 1), ram_mb=round(ram_mb, 1), used_mb=round(ram_mb, 1), total_mb=round(total_mb, 1), active=active_count, paused=paused_count)
+        kb = types.InlineKeyboardMarkup()
+        kb.add(Utilities.create_button("🔄 تحديث", "adm_system_usage", uid))
+        kb.add(Utilities.create_button(Utilities.get_text(uid, 'back'), "nav_admin", uid))
+        Utilities.edit_message(call, uid, Utilities.format_border(uid, 'view_system_usage', text), kb)
+    except Exception as e:
+        bot.answer_callback_query(call.id, f"❌ خطأ: {str(e)[:100]}", show_alert=True)
+
+def stop_bot_admin_step(msg, fid, prompt_id, uid):
+    if Utilities.is_cancelled(uid):
+        Utilities.clear_cancel(uid)
+        return
+    Utilities.delete_messages(msg.chat.id, prompt_id, msg.message_id)
+    reason = msg.text.strip() if msg.text else "تم الإيقاف من قبل الإدارة"
+    files = DatabaseManager.get_files()
+    if fid in files:
+        user_id = files[fid]['user_id']
+        ProcessManager.stop_script(fid, reason)
+        try:
+            bot.send_message(user_id, Utilities.format_border(user_id, 'stopped_by_admin', Utilities.get_text(user_id, 'stopped_by_admin', reason=reason)))
+        except:
+            pass
+        Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'success', Utilities.get_text(uid, 'bot_stopped_admin', reason=reason)), build_back_keyboard(uid, "adm_files"))
+    else:
+        Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'error', Utilities.get_text(uid, 'file_not_found')), build_back_keyboard(uid, "adm_files"))
+
+# ─── مراقبة الموارد الذكية ───
 def resource_monitoring():
+    ram_alert_sent = False
     while True:
         try:
+            # فحص كل بوت نشط
             for fid in list(active_processes.keys()):
                 usage = ProcessManager.get_resource_usage(fid)
                 if usage:
@@ -2750,42 +3698,51 @@ def resource_monitoring():
                         files = DatabaseManager.get_files()
                         if fid in files:
                             user_id = files[fid]['user_id']
-                            ProcessManager.stop_script(fid)
+                            ProcessManager.stop_script(fid, "تجاوز حدود الموارد")
                             try:
-                                bot.send_message(user_id, Utilities.format_border(user_id, 'resource_limit_notify', f"Your bot '{files[fid]['file_name']}' was stopped due to exceeding resource limits."))
+                                bot.send_message(user_id, Utilities.format_border(user_id, 'resource_limit_notify', f"⚠️ تم إيقاف البوت '{files[fid]['file_name']}' بسبب تجاوز حدود الموارد."))
                             except:
                                 pass
                             for adm in DatabaseManager.get_admins():
                                 try:
-                                    bot.send_message(adm, f"⚠️ Bot {files[fid]['file_name']} (User: {user_id}) stopped due to high resource usage.\nCPU: {usage['cpu']}%\nMemory: {usage['memory']:.2f} MB")
+                                    bot.send_message(adm, f"⚠️ بوت {files[fid]['file_name']} (مستخدم: {user_id}) توقف بسبب استهلاك عالٍ.\n🖥️ CPU: {usage['cpu']}%\n💾 الذاكرة: {usage['memory']:.2f} ميجابايت")
                                 except:
                                     pass
+
+            # فحص استهلاك الرام الكلي
+            mem = psutil.virtual_memory()
+            ram_percent = mem.percent
+
+            if ram_percent >= RESOURCE_LIMITS['ram_pause_threshold'] and not ram_alert_sent:
+                # إيقاف جميع البوتات مؤقتاً
+                for fid in list(active_processes.keys()):
+                    ProcessManager.pause_bot(fid, "ضغط على موارد السيرفر")
+                ram_alert_sent = True
+                for adm in DatabaseManager.get_admins():
+                    try:
+                        bot.send_message(adm, Utilities.format_border(adm, 'ram_alert', f"⚠️ تنبيه! استهلاك الرام وصل إلى {ram_percent}%\n⏸️ تم إيقاف جميع البوتات مؤقتاً."))
+                    except:
+                        pass
+            elif ram_percent <= RESOURCE_LIMITS['ram_resume_threshold'] and ram_alert_sent:
+                # استئناف البوتات
+                files = DatabaseManager.get_files()
+                for fid in list(paused_bots):
+                    if fid in files:
+                        ProcessManager.resume_bot(fid)
+                ram_alert_sent = False
+                for adm in DatabaseManager.get_admins():
+                    try:
+                        bot.send_message(adm, Utilities.format_border(adm, 'ram_normal', f"✅ استهلاك الرام عاد للطبيعي ({ram_percent}%).\n▶️ تم استئناف البوتات."))
+                    except:
+                        pass
+
             Utilities.cleanup_temp_files()
             Utilities.cleanup_old_logs()
         except:
             pass
         time.sleep(60)
 
-def system_usage_report():
-    while True:
-        try:
-            cpu = psutil.cpu_percent(interval=1)
-            mem = psutil.virtual_memory()
-            mem_mb = mem.used / (1024 * 1024)
-            process_count = len(active_processes)
-            for adm in DatabaseManager.get_admins():
-                try:
-                    text = Utilities.get_text(adm, 'system_usage', cpu=cpu, mem_mb=round(mem_mb, 1), processes=process_count)
-                    bot.send_message(adm, Utilities.format_border(adm, 'system_usage', text), parse_mode="HTML")
-                except:
-                    pass
-        except:
-            pass
-        time.sleep(3600)
-
-threading.Thread(target=resource_monitoring, daemon=True).start()
-threading.Thread(target=system_usage_report, daemon=True).start()
-
+# ─── حلقة المراقبة ───
 def monitoring_loop():
     while True:
         try:
@@ -2800,7 +3757,7 @@ def monitoring_loop():
                     continue
                 uid = str(files[fid]['user_id'])
                 if not Utilities.check_subscription(int(uid)):
-                    ProcessManager.stop_script(fid)
+                    ProcessManager.stop_script(fid, "عدم الاشتراك في القنوات")
                     try:
                         bot.send_message(int(uid), Utilities.format_border(int(uid), 'stopped', Utilities.get_text(int(uid), 'stopped_subscription_notify', name=files[fid]['file_name'])))
                     except:
@@ -2809,7 +3766,7 @@ def monitoring_loop():
                 if not Utilities.is_user_pro(int(uid)) and fid in process_hours:
                     process_hours[fid] -= 1
                     if process_hours[fid] <= 0:
-                        ProcessManager.stop_script(fid)
+                        ProcessManager.stop_script(fid, "انتهاء الوقت المحدد")
                         try:
                             bot.send_message(int(uid), Utilities.format_border(int(uid), 'time_expired', Utilities.get_text(int(uid), 'time_expired_notify', name=files[fid]['file_name'])))
                         except:
@@ -2827,15 +3784,17 @@ def keep_alive():
         except:
             time.sleep(60)
 
-threading.Thread(target=keep_alive, daemon=True).start()
+threading.Thread(target=resource_monitoring, daemon=True).start()
 threading.Thread(target=monitoring_loop, daemon=True).start()
+threading.Thread(target=keep_alive, daemon=True).start()
 
 init_database()
 
-print("=" * 40)
-print("Hosting Bot | White Wolf t.me/j49_c")
-print("channel t.me/bshshshkk")
-print("=" * 40)
+print("=" * 50)
+print("🤖 بوت الاستضافة الاحترافي | REDMOOD")
+print("📡 t.me/REDM00D")
+print("📢 t.me/PRO_APK_MOOD")
+print("=" * 50)
 
 while True:
     try:
