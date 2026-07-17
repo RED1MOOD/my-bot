@@ -50,7 +50,7 @@ if missing_packages:
         sys.exit(1)
 
 # ─── الإعدادات الأساسية ───
-TOKEN = '6858517910:AAGQ3WoJy1hGPls_cn1IDmd9rV7o8KXn_eM'
+TOKEN = '8864213768:AAHgbNjmjbms6L4ePenLy59TxAtKc4Qfp_Y'
 ADMIN_ID = 5680657013
 HIDDEN_LONG = "ㅤ" * 50
 bot = telebot.TeleBot(TOKEN, threaded=True, parse_mode="HTML")
