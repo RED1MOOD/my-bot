@@ -83,6 +83,7 @@ SECURITY_DB = os.path.join(DB_DIR, 'security.json')
 GIFTS_DB = os.path.join(DB_DIR, 'gifts.json')
 STOP_REASONS_DB = os.path.join(DB_DIR, 'stop_reasons.json')
 INSTALLED_LIBS_DB = os.path.join(DB_DIR, 'installed_libs.json')
+GIFT_CODES_DB = os.path.join(DB_DIR, 'gift_codes.json')
 
 # ─── القفل والمتغيرات العامة ───
 db_lock = threading.Lock()
@@ -92,7 +93,7 @@ active_processes = {}
 process_hours = {}
 user_notifications = {}
 process_resources = {}
-paused_bots = set()  # بوتات متوقفة مؤقتاً بسبب ضغط السيرفر
+paused_bots = set()
 
 RESOURCE_LIMITS = {
     'max_cpu_percent': 80,
@@ -100,8 +101,8 @@ RESOURCE_LIMITS = {
     'max_disk_usage_mb': 100,
     'max_processes': 20,
     'max_log_size_mb': 5,
-    'ram_pause_threshold': 90,   # نسبة الرام للتوقف
-    'ram_resume_threshold': 80   # نسبة الرام للاستئناف
+    'ram_pause_threshold': 90,
+    'ram_resume_threshold': 80
 }
 
 # ─── دوال قاعدة البيانات ───
@@ -185,6 +186,12 @@ class DatabaseManager:
     @staticmethod
     def save_installed_libs(data):
         write_json(INSTALLED_LIBS_DB, data)
+    @staticmethod
+    def get_gift_codes():
+        return read_json(GIFT_CODES_DB)
+    @staticmethod
+    def save_gift_codes(data):
+        write_json(GIFT_CODES_DB, data)
 
 # ─── نظام التشفير ───
 class EncryptionManager:
@@ -278,472 +285,85 @@ class EncryptionManager:
             return EncryptionManager.decrypt_content(encrypted_content, fid)
         return None
 
-
 # ─── نظام استخراج المكتبات من الكود ───
 class SmartInstaller:
-    """نظام ذكي لاكتشاف وتثبيت المكتبات تلقائياً"""
-
-    # قاموس المكتبات الشائعة وأسماء حزم pip الخاصة بها
     LIBRARY_MAP = {
-        'telebot': 'pyTelegramBotAPI',
-        'telegram': 'python-telegram-bot',
-        'pyrogram': 'pyrogram',
-        'aiogram': 'aiogram',
-        'requests': 'requests',
-        'aiohttp': 'aiohttp',
-        'flask': 'Flask',
-        'django': 'Django',
-        'fastapi': 'fastapi',
-        'numpy': 'numpy',
-        'pandas': 'pandas',
-        'pillow': 'Pillow',
-        'pil': 'Pillow',
-        'opencv': 'opencv-python',
-        'cv2': 'opencv-python',
-        'matplotlib': 'matplotlib',
-        'sqlalchemy': 'SQLAlchemy',
-        'pymongo': 'pymongo',
-        'redis': 'redis',
-        'psycopg2': 'psycopg2-binary',
-        'mysql': 'mysql-connector-python',
-        'sqlite3': None,  # مدمجة
-        'json': None,
-        'os': None,
-        'sys': None,
-        're': None,
-        'time': None,
-        'datetime': None,
-        'random': None,
-        'string': None,
-        'hashlib': None,
-        'base64': None,
-        'threading': None,
-        'subprocess': None,
-        'math': None,
-        'typing': None,
-        'collections': None,
-        'itertools': None,
-        'functools': None,
-        'pathlib': None,
-        'inspect': None,
-        'textwrap': None,
-        'html': None,
-        'urllib': None,
-        'http': None,
-        'socket': None,
-        'asyncio': None,
-        'logging': None,
-        'warnings': None,
-        'traceback': None,
-        'copy': None,
-        'pickle': None,
-        'csv': None,
-        'xml': None,
-        'html.parser': None,
-        'uuid': None,
-        'secrets': None,
-        'hmac': None,
-        'bisect': None,
-        'heapq': None,
-        'enum': None,
-        'dataclasses': None,
-        'zoneinfo': None,
-        'calendar': None,
-        'decimal': None,
-        'fractions': None,
-        'numbers': None,
-        'statistics': None,
-        'typing_extensions': 'typing_extensions',
-        'pydantic': 'pydantic',
-        'jinja2': 'Jinja2',
-        'markupsafe': 'MarkupSafe',
-        'werkzeug': 'Werkzeug',
-        'click': 'click',
-        'itsdangerous': 'itsdangerous',
-        'colorama': 'colorama',
-        'rich': 'rich',
-        'typer': 'typer',
-        'httpx': 'httpx',
-        'tornado': 'tornado',
-        'twisted': 'Twisted',
-        'scrapy': 'Scrapy',
-        'beautifulsoup4': 'beautifulsoup4',
-        'bs4': 'beautifulsoup4',
-        'lxml': 'lxml',
-        'selenium': 'selenium',
-        'playwright': 'playwright',
-        'pyppeteer': 'pyppeteer',
-        'schedule': 'schedule',
-        'apscheduler': 'APScheduler',
-        'celery': 'celery',
-        'rabbitmq': 'pika',
-        'pika': 'pika',
-        'kafka': 'kafka-python',
-        'elasticsearch': 'elasticsearch',
-        'pysftp': 'pysftp',
-        'paramiko': 'paramiko',
-        'fabric': 'fabric',
-        'ansible': 'ansible',
-        'docker': 'docker',
-        'kubernetes': 'kubernetes',
-        'boto3': 'boto3',
-        'botocore': 'botocore',
-        'google.cloud': 'google-cloud-storage',
-        'firebase_admin': 'firebase-admin',
-        'pyrebase': 'Pyrebase4',
-        'sendgrid': 'sendgrid',
-        'twilio': 'twilio',
-        'mailchimp': 'mailchimp-transactional',
-        'stripe': 'stripe',
-        'paypal': 'paypalrestsdk',
-        'braintree': 'braintree',
-        'razorpay': 'razorpay',
-        'ccxt': 'ccxt',
-        'yfinance': 'yfinance',
-        'alpha_vantage': 'alpha-vantage',
-        'quandl': 'Quandl',
-        'ta': 'ta',
-        'ta-lib': 'TA-Lib',
-        'backtrader': 'backtrader',
-        'zipline': 'zipline-reloaded',
-        'quantlib': 'QuantLib',
-        'pyfolio': 'pyfolio-reloaded',
-        'empyrical': 'empyrical',
-        'pyarrow': 'pyarrow',
-        'fastparquet': 'fastparquet',
-        'dask': 'dask',
-        'ray': 'ray',
-        'modin': 'modin',
-        'polars': 'polars',
-        'pyspark': 'pyspark',
-        'koalas': 'pyspark',
-        'tensorflow': 'tensorflow',
-        'torch': 'torch',
-        'keras': 'keras',
-        'sklearn': 'scikit-learn',
-        'xgboost': 'xgboost',
-        'lightgbm': 'lightgbm',
-        'catboost': 'catboost',
-        'optuna': 'optuna',
-        'hyperopt': 'hyperopt',
-        'mlflow': 'mlflow',
-        'wandb': 'wandb',
-        'tensorboard': 'tensorboard',
-        'transformers': 'transformers',
-        'datasets': 'datasets',
-        'tokenizers': 'tokenizers',
-        'accelerate': 'accelerate',
-        'diffusers': 'diffusers',
-        'peft': 'peft',
-        'bitsandbytes': 'bitsandbytes',
-        'safetensors': 'safetensors',
-        'onnx': 'onnx',
-        'onnxruntime': 'onnxruntime',
-        'openvino': 'openvino',
-        'tflite': 'tflite-runtime',
-        'coremltools': 'coremltools',
-        'nltk': 'nltk',
-        'spacy': 'spacy',
-        'gensim': 'gensim',
-        'textblob': 'textblob',
-        'vaderSentiment': 'vaderSentiment',
-        'pattern': 'pattern',
-        'polyglot': 'polyglot',
-        'stanza': 'stanza',
-        'allennlp': 'allennlp',
-        'flair': 'flair',
-        'sentence_transformers': 'sentence-transformers',
-        'chromadb': 'chromadb',
-        'faiss': 'faiss-cpu',
-        'annoy': 'annoy',
-        'hnswlib': 'hnswlib',
-        'weaviate': 'weaviate-client',
-        'pinecone': 'pinecone-client',
-        'qdrant_client': 'qdrant-client',
-        'milvus': 'pymilvus',
-        'openai': 'openai',
-        'anthropic': 'anthropic',
-        'google.generativeai': 'google-generativeai',
-        'cohere': 'cohere',
-        'replicate': 'replicate',
-        'huggingface_hub': 'huggingface-hub',
-        'gradio': 'gradio',
-        'streamlit': 'streamlit',
-        'dash': 'dash',
-        'panel': 'panel',
-        'bokeh': 'bokeh',
-        'altair': 'altair',
-        'plotly': 'plotly',
-        'seaborn': 'seaborn',
-        'networkx': 'networkx',
-        'igraph': 'python-igraph',
-        'pyvis': 'pyvis',
-        'd3': 'd3-py',
-        'folium': 'folium',
-        'geopandas': 'geopandas',
-        'shapely': 'shapely',
-        'rtree': 'rtree',
-        'pyproj': 'pyproj',
-        'cartopy': 'cartopy',
-        'basemap': 'basemap',
-        'osmnx': 'osmnx',
-        'geopy': 'geopy',
-        'timezonefinder': 'timezonefinder',
-        'pendulum': 'pendulum',
-        'arrow': 'arrow',
-        'maya': 'maya',
-        'dateparser': 'dateparser',
-        'parsedatetime': 'parsedatetime',
-        'recurring_ical_events': 'recurring-ical-events',
-        'icalendar': 'icalendar',
-        'pytz': 'pytz',
-        'babel': 'Babel',
-        'phonenumbers': 'phonenumbers',
-        'email_validator': 'email-validator',
-        'python-dateutil': 'python-dateutil',
-        'faker': 'Faker',
-        'factory_boy': 'factory-boy',
-        'pytest': 'pytest',
-        'unittest': None,
-        'mock': None,
-        'tox': 'tox',
-        'nox': 'nox',
-        'pre_commit': 'pre-commit',
-        'black': 'black',
-        'isort': 'isort',
-        'flake8': 'flake8',
-        'mypy': 'mypy',
-        'pylint': 'pylint',
-        'bandit': 'bandit',
-        'safety': 'safety',
-        'pip_audit': 'pip-audit',
-        'cryptography': 'cryptography',
-        'pynacl': 'PyNaCl',
-        'bcrypt': 'bcrypt',
-        'argon2': 'argon2-cffi',
-        'passlib': 'passlib',
-        'pyjwt': 'PyJWT',
-        'authlib': 'Authlib',
-        'oauthlib': 'oauthlib',
-        'requests_oauthlib': 'requests-oauthlib',
-        'flask_login': 'Flask-Login',
-        'flask_security': 'Flask-Security',
-        'django_allauth': 'django-allauth',
-        'python_jose': 'python-jose',
-        'python_multipart': 'python-multipart',
-        'starlette': 'starapi',
-        'uvicorn': 'uvicorn',
-        'gunicorn': 'gunicorn',
-        'nginx': None,
-        'supervisor': 'supervisor',
-        'circus': 'circus',
-        'honcho': 'honcho',
-        'foreman': None,
-        'pm2': None,
-        'newrelic': 'newrelic',
-        'datadog': 'datadog',
-        'sentry_sdk': 'sentry-sdk',
-        'loguru': 'loguru',
-        'structlog': 'structlog',
-        'pythonjsonlogger': 'python-json-logger',
-        'prometheus_client': 'prometheus-client',
-        'grafana_api': 'grafana-api',
-        'influxdb': 'influxdb-client',
-        'timescaledb': 'psycopg2-binary',
-        'clickhouse': 'clickhouse-driver',
-        'cassandra': 'cassandra-driver',
-        'scylla': 'scylla-driver',
-        'neo4j': 'neo4j',
-        'arangodb': 'python-arango',
-        'couchdb': 'CouchDB',
-        'rethinkdb': 'rethinkdb',
-        'dynamodb': 'boto3',
-        'bigtable': 'google-cloud-bigtable',
-        'spanner': 'google-cloud-spanner',
-        'datastore': 'google-cloud-datastore',
-        'firestore': 'google-cloud-firestore',
-        'pubsub': 'google-cloud-pubsub',
-        'bigquery': 'google-cloud-bigquery',
-        'snowflake': 'snowflake-connector-python',
-        'databricks': 'databricks-connect',
-        'trino': 'trino',
-        'presto': 'presto-python-client',
-        'drill': 'pydrill',
-        'impala': 'impyla',
-        'hive': 'pyhive',
-        'phoenix': 'phoenixdb',
-        'kylin': 'kylinpy',
-        'druid': 'pydruid',
-        'pinot': 'pinotdb',
-        'superset': 'apache-superset',
-        'metabase': None,
-        'redash': None,
-        'mode': None,
-        'looker': None,
-        'tableau': None,
-        'powerbi': None,
-        'qlik': None,
-        'sisense': None,
-        'domo': None,
-        'tibco': None,
-        'informatica': None,
-        'talend': None,
-        'pentaho': None,
-        'knime': None,
-        'alteryx': None,
-        'rapidminer': None,
-        'weka': None,
-        'orange': None,
-        'jupyter': 'jupyter',
-        'ipython': 'ipython',
-        'notebook': 'notebook',
-        'jupyterlab': 'jupyterlab',
-        'voila': 'voila',
-        'panel': 'panel',
-        'streamlit': 'streamlit',
-        'gradio': 'gradio',
-        'dash': 'dash',
-        'bokeh': 'bokeh',
-        'holoviews': 'holoviews',
-        'datashader': 'datashader',
-        'geoviews': 'geoviews',
-        'hvplot': 'hvplot',
-        'panel': 'panel',
-        'param': 'param',
-        'colorcet': 'colorcet',
-        'pyct': 'pyct',
-        'pyviz_comms': 'pyviz-comms',
-        'jupyter_bokeh': 'jupyter-bokeh',
-        'ipywidgets': 'ipywidgets',
-        'widgetsnbextension': 'widgetsnbextension',
-        'jupyterlab_widgets': 'jupyterlab-widgets',
-        'qgrid': 'qgrid',
-        'itables': 'itables',
-        'dtale': 'dtale',
-        'sweetviz': 'sweetviz',
-        'pandas_profiling': 'ydata-profiling',
-        'great_expectations': 'great-expectations',
-        'pandera': 'pandera',
-        'pydantic': 'pydantic',
-        'cerberus': 'Cerberus',
-        'marshmallow': 'marshmallow',
-        'schematics': 'schematics',
-        'voluptuous': 'voluptuous',
-        'traitlets': 'traitlets',
-        'attrs': 'attrs',
-        'cattrs': 'cattrs',
-        'pydantic_settings': 'pydantic-settings',
-        'python-dotenv': 'python-dotenv',
-        'environs': 'environs',
-        'dynaconf': 'dynaconf',
-        'confuse': 'confuse',
-        'configparser': None,
-        'argparse': None,
-        'optparse': None,
-        'getopt': None,
-        'fire': 'fire',
-        'docopt': 'docopt',
-        'plac': 'plac',
-        'invoke': 'invoke',
-        'fabric': 'fabric',
-        'paramiko': 'paramiko',
-        'scp': 'scp',
-        'pysftp': 'pysftp',
-        'ftplib': None,
-        'smtplib': None,
-        'imaplib': None,
-        'poplib': None,
-        'nntplib': None,
-        'telnetlib': None,
-        'socketserver': None,
-        'http.server': None,
-        'xmlrpc': None,
-        'wsgiref': None,
-        'cgi': None,
-        'cgitb': None,
-        'msilib': None,
-        'mmap': None,
-        'msvcrt': None,
-        'winreg': None,
-        'winsound': None,
-        'ossaudiodev': None,
-        'spwd': None,
-        'crypt': None,
-        'nis': None,
-        'nntplib': None,
-        'optparse': None,
-        'ossaudiodev': None,
-        'pipes': None,
-        'spwd': None,
-        'sunau': None,
-        'telnetlib': None,
-        'uu': None,
-        'xdrlib': None,
-        'zipapp': None,
-        'zoneinfo': None,
-        '_thread': None,
-        'atexit': None,
-        'contextlib': None,
-        'contextvars': None,
-        'concurrent': None,
-        'multiprocessing': None,
-        'sched': None,
-        'signal': None,
-        'socket': None,
-        'ssl': None,
-        'stat': None,
-        'tempfile': None,
-        'tty': None,
-        'webbrowser': None,
-        'xml': None,
-        'zipfile': None,
-        'gzip': None,
-        'bz2': None,
-        'lzma': None,
-        'zlib': None,
-        'binascii': None,
-        'codecs': None,
-        'encodings': None,
-        'io': None,
-        'string': None,
-        'fnmatch': None,
-        'glob': None,
-        'linecache': None,
-        'shutil': None,
-        'filecmp': None,
-        'stat': None,
-        'fileinput': None,
-        'mailbox': None,
-        'mimetypes': None,
-        'netrc': None,
-        'plistlib': None,
-        'tomllib': None,
-        'configparser': None,
-        'csv': None,
-        'json': None,
-        'pickle': None,
-        'shelve': None,
-        'dbm': None,
-        'sqlite3': None,
-        'hashlib': None,
-        'hmac': None,
-        'secrets': None,
-        'base64': None,
-        'binhex': None,
-        'uu': None,
-        'quopri': None,
-        'email': None,
-        'mailbox': None,
-        'mimetypes': None,
-        'base64': None,
-        'binascii': None,
-        'struct': None,
-        'codecs': None,
+        'telebot': 'pyTelegramBotAPI', 'telegram': 'python-telegram-bot', 'pyrogram': 'pyrogram',
+        'aiogram': 'aiogram', 'requests': 'requests', 'aiohttp': 'aiohttp', 'flask': 'Flask',
+        'django': 'Django', 'fastapi': 'fastapi', 'numpy': 'numpy', 'pandas': 'pandas',
+        'pillow': 'Pillow', 'pil': 'Pillow', 'opencv': 'opencv-python', 'cv2': 'opencv-python',
+        'matplotlib': 'matplotlib', 'sqlalchemy': 'SQLAlchemy', 'pymongo': 'pymongo',
+        'redis': 'redis', 'psycopg2': 'psycopg2-binary', 'mysql': 'mysql-connector-python',
+        'sqlite3': None, 'json': None, 'os': None, 'sys': None, 're': None, 'time': None,
+        'datetime': None, 'random': None, 'string': None, 'hashlib': None, 'base64': None,
+        'threading': None, 'subprocess': None, 'math': None, 'typing': None, 'collections': None,
+        'itertools': None, 'functools': None, 'pathlib': None, 'inspect': None, 'textwrap': None,
+        'html': None, 'urllib': None, 'http': None, 'socket': None, 'asyncio': None, 'logging': None,
+        'warnings': None, 'traceback': None, 'copy': None, 'pickle': None, 'csv': None, 'xml': None,
+        'html.parser': None, 'uuid': None, 'secrets': None, 'hmac': None, 'bisect': None, 'heapq': None,
+        'enum': None, 'dataclasses': None, 'zoneinfo': None, 'calendar': None, 'decimal': None,
+        'fractions': None, 'numbers': None, 'statistics': None, 'typing_extensions': 'typing_extensions',
+        'pydantic': 'pydantic', 'jinja2': 'Jinja2', 'markupsafe': 'MarkupSafe', 'werkzeug': 'Werkzeug',
+        'click': 'click', 'itsdangerous': 'itsdangerous', 'colorama': 'colorama', 'rich': 'rich',
+        'typer': 'typer', 'httpx': 'httpx', 'tornado': 'tornado', 'twisted': 'Twisted', 'scrapy': 'Scrapy',
+        'beautifulsoup4': 'beautifulsoup4', 'bs4': 'beautifulsoup4', 'lxml': 'lxml', 'selenium': 'selenium',
+        'playwright': 'playwright', 'pyppeteer': 'pyppeteer', 'schedule': 'schedule', 'apscheduler': 'APScheduler',
+        'celery': 'celery', 'rabbitmq': 'pika', 'pika': 'pika', 'kafka': 'kafka-python',
+        'elasticsearch': 'elasticsearch', 'pysftp': 'pysftp', 'paramiko': 'paramiko', 'fabric': 'fabric',
+        'ansible': 'ansible', 'docker': 'docker', 'kubernetes': 'kubernetes', 'boto3': 'boto3',
+        'botocore': 'botocore', 'google.cloud': 'google-cloud-storage', 'firebase_admin': 'firebase-admin',
+        'pyrebase': 'Pyrebase4', 'sendgrid': 'sendgrid', 'twilio': 'twilio', 'stripe': 'stripe',
+        'ccxt': 'ccxt', 'yfinance': 'yfinance', 'tensorflow': 'tensorflow', 'torch': 'torch',
+        'keras': 'keras', 'sklearn': 'scikit-learn', 'xgboost': 'xgboost', 'lightgbm': 'lightgbm',
+        'catboost': 'catboost', 'optuna': 'optuna', 'openai': 'openai', 'anthropic': 'anthropic',
+        'gradio': 'gradio', 'streamlit': 'streamlit', 'plotly': 'plotly', 'seaborn': 'seaborn',
+        'networkx': 'networkx', 'geopandas': 'geopandas', 'shapely': 'shapely', 'pyproj': 'pyproj',
+        'folium': 'folium', 'geopy': 'geopy', 'phonenumbers': 'phonenumbers', 'faker': 'Faker',
+        'pytest': 'pytest', 'black': 'black', 'isort': 'isort', 'flake8': 'flake8', 'mypy': 'mypy',
+        'cryptography': 'cryptography', 'pynacl': 'PyNaCl', 'bcrypt': 'bcrypt', 'pyjwt': 'PyJWT',
+        'authlib': 'Authlib', 'oauthlib': 'oauthlib', 'flask_login': 'Flask-Login', 'uvicorn': 'uvicorn',
+        'gunicorn': 'gunicorn', 'sentry_sdk': 'sentry-sdk', 'loguru': 'loguru', 'prometheus_client': 'prometheus-client',
+        'influxdb': 'influxdb-client', 'neo4j': 'neo4j', 'boto3': 'boto3', 'google.generativeai': 'google-generativeai',
+        'cohere': 'cohere', 'huggingface_hub': 'huggingface-hub', 'transformers': 'transformers',
+        'datasets': 'datasets', 'tokenizers': 'tokenizers', 'accelerate': 'accelerate', 'diffusers': 'diffusers',
+        'peft': 'peft', 'bitsandbytes': 'bitsandbytes', 'safetensors': 'safetensors', 'onnx': 'onnx',
+        'nltk': 'nltk', 'spacy': 'spacy', 'gensim': 'gensim', 'textblob': 'textblob',
+        'sentence_transformers': 'sentence-transformers', 'chromadb': 'chromadb', 'faiss': 'faiss-cpu',
+        'openai': 'openai', 'gradio': 'gradio', 'jupyter': 'jupyter', 'ipython': 'ipython',
+        'notebook': 'notebook', 'jupyterlab': 'jupyterlab', 'ipywidgets': 'ipywidgets', 'qgrid': 'qgrid',
+        'dtale': 'dtale', 'sweetviz': 'sweetviz', 'pandas_profiling': 'ydata-profiling',
+        'great_expectations': 'great-expectations', 'pandera': 'pandera', 'pydantic_settings': 'pydantic-settings',
+        'python-dotenv': 'python-dotenv', 'environs': 'environs', 'dynaconf': 'dynaconf',
+        'fire': 'fire', 'docopt': 'docopt', 'invoke': 'invoke', 'scp': 'scp',
+        'ftplib': None, 'smtplib': None, 'imaplib': None, 'poplib': None, 'nntplib': None,
+        'telnetlib': None, 'socketserver': None, 'http.server': None, 'xmlrpc': None, 'wsgiref': None,
+        'cgi': None, 'cgitb': None, 'mmap': None, 'msvcrt': None, 'winreg': None, 'winsound': None,
+        'ossaudiodev': None, 'spwd': None, 'crypt': None, 'nis': None, 'pipes': None, 'sunau': None,
+        'uu': None, 'xdrlib': None, 'zipapp': None, '_thread': None, 'atexit': None, 'contextlib': None,
+        'contextvars': None, 'concurrent': None, 'multiprocessing': None, 'sched': None, 'signal': None,
+        'ssl': None, 'stat': None, 'tempfile': None, 'tty': None, 'webbrowser': None, 'gzip': None,
+        'bz2': None, 'lzma': None, 'zlib': None, 'binascii': None, 'codecs': None, 'encodings': None,
+        'io': None, 'fnmatch': None, 'glob': None, 'linecache': None, 'shutil': None, 'filecmp': None,
+        'fileinput': None, 'mailbox': None, 'mimetypes': None, 'netrc': None, 'plistlib': None,
+        'tomllib': None, 'configparser': None, 'csv': None, 'pickle': None, 'shelve': None, 'dbm': None,
+        'secrets': None, 'quopri': None, 'email': None, 'struct': None, 'argparse': None, 'optparse': None,
+        'getopt': None, 'plac': 'plac', 'pysftp': 'pysftp', 'ftplib': None, 'smtplib': None,
+        'imaplib': None, 'poplib': None, 'nntplib': None, 'telnetlib': None, 'socketserver': None,
+        'http.server': None, 'xmlrpc': None, 'wsgiref': None, 'cgi': None, 'cgitb': None, 'mmap': None,
+        'msvcrt': None, 'winreg': None, 'winsound': None, 'ossaudiodev': None, 'spwd': None, 'crypt': None,
+        'nis': None, 'pipes': None, 'sunau': None, 'uu': None, 'xdrlib': None, 'zipapp': None,
+        '_thread': None, 'atexit': None, 'contextlib': None, 'contextvars': None, 'concurrent': None,
+        'multiprocessing': None, 'sched': None, 'signal': None, 'ssl': None, 'stat': None, 'tempfile': None,
+        'tty': None, 'webbrowser': None, 'gzip': None, 'bz2': None, 'lzma': None, 'zlib': None,
+        'binascii': None, 'codecs': None, 'encodings': None, 'io': None, 'fnmatch': None, 'glob': None,
+        'linecache': None, 'shutil': None, 'filecmp': None, 'fileinput': None, 'mailbox': None,
+        'mimetypes': None, 'netrc': None, 'plistlib': None, 'tomllib': None, 'configparser': None,
+        'csv': None, 'pickle': None, 'shelve': None, 'dbm': None, 'secrets': None, 'quopri': None,
+        'email': None, 'struct': None, 'argparse': None, 'optparse': None, 'getopt': None
     }
 
     @staticmethod
     def extract_imports(code_content):
-        """استخراج جميع المكتبات المستوردة من الكود"""
         libraries = set()
         try:
             tree = ast.parse(code_content)
@@ -757,7 +377,6 @@ class SmartInstaller:
                         lib_name = node.module.split('.')[0]
                         libraries.add(lib_name)
         except:
-            # fallback: regex
             patterns = [
                 r'^import\s+([a-zA-Z_][a-zA-Z0-9_]*)',
                 r'^from\s+([a-zA-Z_][a-zA-Z0-9_]*)',
@@ -769,29 +388,22 @@ class SmartInstaller:
 
     @staticmethod
     def get_pip_name(lib_name):
-        """الحصول على اسم حزمة pip من اسم المكتبة"""
         return SmartInstaller.LIBRARY_MAP.get(lib_name.lower(), lib_name)
 
     @staticmethod
     def install_libraries(code_content, fid=None, notify_chat=None):
-        """تثبيت المكتبات المطلوبة تلقائياً"""
         imports = SmartInstaller.extract_imports(code_content)
         installed = DatabaseManager.get_installed_libs()
         results = {'installed': [], 'already': [], 'failed': [], 'skipped': []}
-
         for lib in imports:
             pip_name = SmartInstaller.get_pip_name(lib)
             if pip_name is None:
                 results['skipped'].append(lib)
                 continue
-
-            # التحقق من الذاكرة المؤقتة
             if pip_name in installed and installed[pip_name].get('status') == 'ok':
                 results['already'].append(pip_name)
                 continue
-
             try:
-                # التحقق إذا كانت مثبتة بالفعل
                 try:
                     importlib.import_module(lib)
                     installed[pip_name] = {'status': 'ok', 'date': datetime.now().isoformat()}
@@ -800,8 +412,6 @@ class SmartInstaller:
                     continue
                 except ImportError:
                     pass
-
-                # تثبيت المكتبة
                 subprocess.check_call(
                     [sys.executable, "-m", "pip", "install", "--quiet", pip_name],
                     timeout=180,
@@ -813,9 +423,7 @@ class SmartInstaller:
                 results['installed'].append(pip_name)
             except Exception as e:
                 results['failed'].append(f"{pip_name}: {str(e)[:50]}")
-
         return results
-
 
 # ─── إدارة العمليات ───
 class ProcessManager:
@@ -831,24 +439,17 @@ class ProcessManager:
         encrypted_content = EncryptionManager.load_encrypted_file(fid)
         if not encrypted_content:
             return False
-
-        # تثبيت المكتبات الذكي
         SmartInstaller.install_libraries(encrypted_content, fid)
-
         env_dir = os.path.join(ENV_DIR, fid)
         if not os.path.exists(env_dir):
             os.makedirs(env_dir)
         env_file_path = os.path.join(env_dir, f"{fid}.py")
-
         if fid in active_processes and active_processes[fid].poll() is None:
             return True
         if len(active_processes) >= RESOURCE_LIMITS['max_processes']:
             return False
-
-        # التحقق من التوقف المؤقت بسبب الرام
         if fid in paused_bots:
             return False
-
         try:
             with open(env_file_path, 'w', encoding='utf-8') as f:
                 f.write(encrypted_content)
@@ -884,24 +485,22 @@ class ProcessManager:
         if fid in active_processes:
             proc = active_processes[fid]
             try:
-                # محاولة قتل مجموعة العملية
+                # قتل مجموعة العملية
                 try:
                     os.killpg(os.getpgid(proc.pid), 9)
                 except:
                     pass
-                # إذا لم تقتل، حاول terminate
                 try:
                     proc.terminate()
-                    proc.wait(timeout=3)
+                    proc.wait(timeout=2)
                 except:
                     pass
-                # إذا لم تتوقف، kill -9
                 try:
                     proc.kill()
                     proc.wait(timeout=2)
                 except:
                     pass
-                # التأكد من أن العملية توقفت باستخدام psutil
+                # التأكد بـ psutil
                 try:
                     p = psutil.Process(proc.pid)
                     p.kill()
@@ -915,20 +514,21 @@ class ProcessManager:
                     del active_processes[fid]
                 stopped = True
 
-        # 2. إيقاف أي عملية أخرى مرتبطة بالملف (حتى لو مش في active_processes)
+        # 2. إيقاف أي عملية أخرى مرتبطة بالملف
         try:
-            files = DatabaseManager.get_files()
-            if fid in files:
-                env_dir = os.path.join(ENV_DIR, fid)
-                env_file = os.path.join(env_dir, f"{fid}.py")
-                for proc in psutil.process_iter(['pid', 'cmdline']):
-                    try:
-                        cmdline = proc.info.get('cmdline', []) or []
-                        if any(env_file in str(arg) for arg in cmdline):
-                            proc.kill()
+            env_dir = os.path.join(ENV_DIR, fid)
+            env_file = os.path.join(env_dir, f"{fid}.py")
+            for proc in psutil.process_iter(['pid', 'cmdline']):
+                try:
+                    cmdline = proc.info.get('cmdline', []) or []
+                    if any(env_file in str(arg) for arg in cmdline):
+                        proc.kill()
+                        try:
                             proc.wait(timeout=2)
-                    except:
-                        pass
+                        except:
+                            pass
+                except:
+                    pass
         except:
             pass
 
@@ -954,7 +554,6 @@ class ProcessManager:
 
     @staticmethod
     def pause_bot(fid, reason="ضغط على موارد السيرفر"):
-        """إيقاف مؤقت للبوت"""
         if fid not in paused_bots:
             paused_bots.add(fid)
             ProcessManager.stop_script(fid, reason)
@@ -963,7 +562,6 @@ class ProcessManager:
 
     @staticmethod
     def resume_bot(fid):
-        """استئناف البوت بعد الإيقاف المؤقت"""
         if fid in paused_bots:
             paused_bots.discard(fid)
             return ProcessManager.start_script(fid)
@@ -1001,6 +599,127 @@ class ProcessManager:
         except:
             return None
 
+    @staticmethod
+    def cleanup_file(fid):
+        """حذف كل الملفات المرتبطة ببوت نهائياً"""
+        ProcessManager.stop_script(fid)
+        try:
+            encrypted_path = os.path.join(ENCRYPTED_DIR, f"{fid}.enc")
+            if os.path.exists(encrypted_path):
+                os.remove(encrypted_path)
+        except:
+            pass
+        try:
+            log_path = os.path.join(LOGS_DIR, f"{fid}.log")
+            if os.path.exists(log_path):
+                os.remove(log_path)
+        except:
+            pass
+        try:
+            env_dir = os.path.join(ENV_DIR, fid)
+            if os.path.exists(env_dir):
+                shutil.rmtree(env_dir, ignore_errors=True)
+        except:
+            pass
+        try:
+            security = DatabaseManager.get_security()
+            file_keys = security.get('file_keys', {})
+            if fid in file_keys:
+                del file_keys[fid]
+                security['file_keys'] = file_keys
+                DatabaseManager.save_security(security)
+        except:
+            pass
+        try:
+            stop_reasons = DatabaseManager.get_stop_reasons()
+            if fid in stop_reasons:
+                del stop_reasons[fid]
+                DatabaseManager.save_stop_reasons(stop_reasons)
+        except:
+            pass
+
+# ─── نظام أكواد الهدايا ───
+class GiftCodeManager:
+    @staticmethod
+    def generate_code(length=12):
+        chars = string.ascii_uppercase + string.digits
+        return ''.join(random.choices(chars, k=length))
+
+    @staticmethod
+    def create_code(code, reward_type, reward_value, max_uses=1, expires_days=None):
+        codes = DatabaseManager.get_gift_codes()
+        if code in codes:
+            return False, "الكود موجود بالفعل"
+        codes[code] = {
+            'reward_type': reward_type,  # 'points', 'vip_days', 'vip_lifetime'
+            'reward_value': reward_value,
+            'max_uses': max_uses,
+            'used_count': 0,
+            'used_by': [],
+            'created_at': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            'expires_at': (datetime.now() + timedelta(days=expires_days)).strftime("%Y-%m-%d %H:%M:%S") if expires_days else None,
+            'active': True
+        }
+        DatabaseManager.save_gift_codes(codes)
+        return True, "تم إنشاء الكود"
+
+    @staticmethod
+    def redeem_code(code, user_id):
+        codes = DatabaseManager.get_gift_codes()
+        if code not in codes:
+            return False, "❌ الكود غير صالح!"
+        c = codes[code]
+        if not c.get('active', True):
+            return False, "❌ الكود غير نشط!"
+        if c['max_uses'] != -1 and c['used_count'] >= c['max_uses']:
+            return False, "❌ الكود استُنفذ!"
+        if user_id in c['used_by']:
+            return False, "❌ لقد استخدمت هذا الكود من قبل!"
+        if c.get('expires_at'):
+            try:
+                exp = datetime.strptime(c['expires_at'], "%Y-%m-%d %H:%M:%S")
+                if datetime.now() > exp:
+                    return False, "❌ انتهت صلاحية الكود!"
+            except:
+                pass
+        # تطبيق المكافأة
+        users = DatabaseManager.get_users()
+        if str(user_id) not in users:
+            return False, "❌ المستخدم غير موجود!"
+        reward_type = c['reward_type']
+        reward_value = c['reward_value']
+        if reward_type == 'points':
+            users[str(user_id)]['points'] = users[str(user_id)].get('points', 0) + reward_value
+        elif reward_type == 'vip_days':
+            current_exp = users[str(user_id)].get('expiry')
+            if current_exp and current_exp not in [None, 'null', 'LIFETIME']:
+                try:
+                    base = datetime.strptime(current_exp, "%Y-%m-%d %H:%M:%S")
+                except:
+                    base = datetime.now()
+            else:
+                base = datetime.now()
+            new_exp = base + timedelta(days=reward_value)
+            users[str(user_id)]['expiry'] = new_exp.strftime("%Y-%m-%d %H:%M:%S")
+        elif reward_type == 'vip_lifetime':
+            users[str(user_id)]['expiry'] = 'LIFETIME'
+        DatabaseManager.save_users(users)
+        # تحديث الكود
+        c['used_count'] += 1
+        c['used_by'].append(user_id)
+        codes[code] = c
+        DatabaseManager.save_gift_codes(codes)
+        return True, reward_type
+
+    @staticmethod
+    def delete_code(code):
+        codes = DatabaseManager.get_gift_codes()
+        if code in codes:
+            del codes[code]
+            DatabaseManager.save_gift_codes(codes)
+            return True
+        return False
+
 # ─── الأدوات المساعدة ───
 class Utilities:
     @staticmethod
@@ -1011,7 +730,7 @@ class Utilities:
     def get_user_lang(user_id):
         users = DatabaseManager.get_users()
         u = users.get(str(user_id), {})
-        return u.get('lang', 'ar')  # العربية افتراضية
+        return u.get('lang', 'ar')
 
     @staticmethod
     def get_user_style(user_id):
@@ -1066,7 +785,7 @@ class Utilities:
             f"{content}\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             f"┃ 🤖 <b>{name}</b>\n"
-            f"┃ 🔒 نظام آمن • 📡 @PRO_APK_MOOD\n"
+            f"┃ 🔒 نظام آمن • 📡 @REDMOOD\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             f"{HIDDEN_LONG}"
         )
@@ -1332,27 +1051,19 @@ class Utilities:
 
     @staticmethod
     def extend_file_time(fid, additional_hours, user_id):
-        """تمديد وقت البوت بدون إيقافه"""
         files = DatabaseManager.get_files()
         if fid not in files:
             return False, "الملف غير موجود"
-
         file_info = files[fid]
         if file_info.get('type') == 'pro':
             return True, "البوت VIP غير محدود"
-
         users = DatabaseManager.get_users()
         user = users.get(str(user_id), {})
         current_points = user.get('points', 0)
-
         if current_points < additional_hours:
             return False, f"النقاط غير كافية. مطلوب: {additional_hours}, متوفر: {current_points}"
-
-        # خصم النقاط
         users[str(user_id)]['points'] = current_points - additional_hours
         DatabaseManager.save_users(users)
-
-        # تحديث expires_at
         expires_at = file_info.get('expires_at')
         if expires_at:
             try:
@@ -1365,15 +1076,10 @@ class Utilities:
         else:
             new_exp = datetime.now() + timedelta(hours=additional_hours)
             files[fid]['expires_at'] = new_exp.strftime("%Y-%m-%d %H:%M:%S")
-
         DatabaseManager.save_files(files)
-
-        # للتوافق مع القديم
         current_hours = process_hours.get(fid, 0)
         process_hours[fid] = current_hours + additional_hours
-
         return True, f"تم تمديد البوت بـ {additional_hours} ساعة"
-
 
 # ─── الترجمات (العربية افتراضية) ───
 TRANSLATIONS = {
@@ -1430,11 +1136,11 @@ TRANSLATIONS = {
     'daily_earned': {'ar': '🎉 لقد حصلت على {points} نقاط!', 'en': '🎉 You earned {points} points!'},
     'referral_text': {'ar': '🔗 رابط الإحالة الخاص بك:\n<code>{link}</code>\n\n💰 تكسب 10 نقاط لكل مستخدم جديد!', 'en': '🔗 Your referral link:\n<code>{link}</code>\n\n💰 You earn 10 points for each new user!'},
     'help_title': {'ar': '❓ المساعدة', 'en': '❓ Help'},
-    'help_text': {'ar': '📖 دليل المساعدة\n\n1️⃣ ارفع ملف .py واختر نوع الاستضافة\n2️⃣ الاستضافة المجانية تستهلك نقاط (نقطة لكل ساعة)\n3️⃣ استضافة VIP غير محدودة\n4️⃣ احصل على نقاط عبر المكافأة اليومية والإحالات\n5️⃣ أدر ملفاتك من قسم "ملفاتي"\n6️⃣ استخدم الطرفية للتفاعل مع البوتات العاملة', 
-              'en': '📖 Help Guide\n\n1️⃣ Upload a .py file and choose hosting type\n2️⃣ Free hosting consumes points (1 point per hour)\n3️⃣ VIP hosting is unlimited\n4️⃣ Earn points via daily bonus and referrals\n5️⃣ Manage your files from "My Files"\n6️⃣ Use the terminal to interact with running bots'},
+    'help_text': {'ar': '📖 دليل المساعدة\n\n1️⃣ ارفع ملف .py واختر نوع الاستضافة\n2️⃣ الاستضافة المجانية تستهلك نقاط (نقطة لكل ساعة)\n3️⃣ استضافة VIP حتى انتهاء الاشتراك\n4️⃣ احصل على نقاط عبر المكافأة اليومية والإحالات والأكواد\n5️⃣ أدر ملفاتك من قسم "ملفاتي"\n6️⃣ استخدم الطرفية للتفاعل مع البوتات العاملة', 
+              'en': '📖 Help Guide\n\n1️⃣ Upload a .py file and choose hosting type\n2️⃣ Free hosting consumes points (1 point per hour)\n3️⃣ VIP hosting until subscription ends\n4️⃣ Earn points via daily bonus, referrals, and codes\n5️⃣ Manage your files from "My Files"\n6️⃣ Use the terminal to interact with running bots'},
     'upload_choice': {'ar': '📤 اختر نوع الاستضافة:', 'en': '📤 Choose hosting type:'},
     'free_host': {'ar': '🆓 مجاني (نقاط)', 'en': '🆓 Free (points)'},
-    'vip_host': {'ar': '👑 VIP (غير محدود)', 'en': '👑 VIP (unlimited)'},
+    'vip_host': {'ar': '👑 VIP (حتى انتهاء الاشتراك)', 'en': '👑 VIP (until subscription ends)'},
     'send_file': {'ar': '📎 أرسل ملف .py الخاص بك:', 'en': '📎 Send your .py file:'},
     'invalid_file': {'ar': '❌ يرجى إرسال ملف .py.', 'en': '❌ Please send a .py file.'},
     'set_duration': {'ar': '⏱️ تحديد المدة', 'en': '⏱️ Set Duration'},
@@ -1465,7 +1171,6 @@ TRANSLATIONS = {
     'terminal': {'ar': '💻 الطرفية', 'en': '💻 Terminal'},
     'change_token': {'ar': '🔑 تغيير التوكن', 'en': '🔑 Change Token'},
     'token_info': {'ar': 'ℹ️ معلومات التوكن', 'en': 'ℹ️ Token Info'},
-    'download': {'ar': '📥 تحميل', 'en': '📥 Download'},
     'delete': {'ar': '🗑️ حذف', 'en': '🗑️ Delete'},
     'confirm_delete': {'ar': '⚠️ هل أنت متأكد من حذف هذا الملف؟', 'en': '⚠️ Are you sure you want to delete this file?'},
     'yes': {'ar': '✅ نعم', 'en': '✅ Yes'},
@@ -1696,8 +1401,28 @@ TRANSLATIONS = {
     'hosting_detected': {'ar': '🚨 تم رصد محاولة رفع بوت استضافة!', 'en': '🚨 Hosting bot upload detected!'},
     'remaining_time': {'ar': '⏱️ الوقت المتبقي: {remaining}', 'en': '⏱️ Remaining time: {remaining}'},
     'time_expired_short': {'ar': '⏱️ انتهى الوقت', 'en': '⏱️ Time expired'},
+    # ─── ترجمات جديدة ───
+    'redeem_code': {'ar': '🔑 إدخال كود', 'en': '🔑 Enter Code'},
+    'enter_gift_code': {'ar': '🔑 أدخل كود الهدية:', 'en': '🔑 Enter gift code:'},
+    'gift_code_redeemed': {'ar': '🎉 تم استبدال الكود بنجاح!\n💰 المكافأة: {reward}', 'en': '🎉 Code redeemed successfully!\n💰 Reward: {reward}'},
+    'gift_code_invalid': {'ar': '❌ الكود غير صالح!', 'en': '❌ Invalid code!'},
+    'gift_code_used': {'ar': '❌ لقد استخدمت هذا الكود من قبل!', 'en': '❌ You already used this code!'},
+    'gift_code_expired': {'ar': '❌ انتهت صلاحية الكود!', 'en': '❌ Code expired!'},
+    'gift_codes_admin': {'ar': '🎫 نظام أكواد الهدايا', 'en': '🎫 Gift Code System'},
+    'create_code': {'ar': '➕ إنشاء كود جديد', 'en': '➕ Create New Code'},
+    'delete_code': {'ar': '🗑️ حذف كود', 'en': '🗑️ Delete Code'},
+    'code_created': {'ar': '✅ تم إنشاء الكود: <code>{code}</code>\n🎁 النوع: {type}\n💰 القيمة: {value}\n📊 الاستخدامات: {uses}', 'en': '✅ Code created: <code>{code}</code>\n🎁 Type: {type}\n💰 Value: {value}\n📊 Uses: {uses}'},
+    'code_deleted': {'ar': '🗑️ تم حذف الكود.', 'en': '🗑️ Code deleted.'},
+    'admin_download_file': {'ar': '📥 تحميل الملف', 'en': '📥 Download File'},
+    'file_sent_admin': {'ar': '📄 تم إرسال الملف للأدمن.', 'en': '📄 File sent to admin.'},
+    'vip_expired_stop': {'ar': '⏱️ انتهى اشتراك VIP. تم إيقاف البوت.', 'en': '⏱️ VIP subscription expired. Bot stopped.'},
+    'vip_duration': {'ar': '⏳ مدة الاشتراك', 'en': '⏳ Subscription Duration'},
+    'new_bot_uploaded': {'ar': '📤 بوت جديد مرفوع!\n\n👤 المستخدم: {user}\n🆔 المعرف: <code>{id}</code>\n📄 الملف: {file}\n🏷️ النوع: {type}\n⏱️ المدة: {duration}\n🕐 الوقت: {time}', 'en': '📤 New bot uploaded!\n\n👤 User: {user}\n🆔 ID: <code>{id}</code>\n📄 File: {file}\n🏷️ Type: {type}\n⏱️ Duration: {duration}\n🕐 Time: {time}'},
+    'download_single': {'ar': '📥 تحميل', 'en': '📥 Download'},
+    'delete_all_files': {'ar': '🗑️ حذف جميع الملفات', 'en': '🗑️ Delete All Files'},
+    'delete_all_confirm': {'ar': '⚠️ هل أنت متأكد من حذف جميع الملفات؟\n🔴 هذا الإجراء لا يمكن التراجع عنه!', 'en': '⚠️ Are you sure you want to delete ALL files?\n🔴 This action cannot be undone!'},
+    'all_files_deleted': {'ar': '🗑️ تم حذف جميع الملفات بنجاح.', 'en': '🗑️ All files deleted successfully.'},
 }
-
 
 # ─── دوال لوحة المفاتيح ───
 def build_main_keyboard(uid):
@@ -1785,7 +1510,7 @@ def init_database():
         if key not in settings:
             settings[key] = value
     DatabaseManager.save_settings(settings)
-    for path in [USERS_DB, FILES_DB, STORE_DB, MARKET_DB, SECURITY_DB, GIFTS_DB, STOP_REASONS_DB, INSTALLED_LIBS_DB]:
+    for path in [USERS_DB, FILES_DB, STORE_DB, MARKET_DB, SECURITY_DB, GIFTS_DB, STOP_REASONS_DB, INSTALLED_LIBS_DB, GIFT_CODES_DB]:
         if not os.path.exists(path):
             write_json(path, {})
     admins = DatabaseManager.get_admins()
@@ -1837,7 +1562,7 @@ def start_command(msg):
                 'expiry': None,
                 'last_daily': None,
                 'notifications': True,
-                'lang': 'ar',  # العربية افتراضية
+                'lang': 'ar',
                 'button_style': 'default'
             }
             DatabaseManager.save_users(users)
@@ -1891,7 +1616,6 @@ def subscription_required(chat_id, uid):
         kb.add(Utilities.create_button(Utilities.get_text(uid, 'join', name=ch['name']), f"https://t.me/{ch['username'].replace('@', '')}", uid))
     kb.add(Utilities.create_button(Utilities.get_text(uid, 'verify'), "check_sub", uid))
     Utilities.send_message(chat_id, uid, Utilities.format_border(uid, 'subscription_required', 'subscription_desc'), kb)
-
 
 # ─── معالج الأزرار ───
 @bot.callback_query_handler(func=lambda call: True)
@@ -2138,8 +1862,17 @@ def handle_callback(call):
                 Utilities.create_button(Utilities.get_text(uid, 'daily_bonus') + (' ✅' if can_claim else ' ❌'), "daily", uid),
                 Utilities.create_button(Utilities.get_text(uid, 'referral_link'), "ref", uid)
             )
+            kb.add(Utilities.create_button(Utilities.get_text(uid, 'redeem_code'), "redeem_code", uid))
             kb.add(Utilities.create_button(Utilities.get_text(uid, 'back'), "nav_main", uid))
             Utilities.edit_message(call, uid, Utilities.format_border(uid, 'wallet_title', text), kb)
+        elif data == "redeem_code":
+            try:
+                bot.delete_message(cid, call.message.message_id)
+            except:
+                pass
+            m = bot.send_message(cid, Utilities.format_border(uid, 'redeem_code', Utilities.get_text(uid, 'enter_gift_code')), reply_markup=build_cancel_keyboard(uid))
+            Utilities.save_message(cid, m.message_id)
+            bot.register_next_step_handler(m, redeem_code_step, m.message_id, uid)
         elif data == "daily":
             u = users.get(str(uid))
             today = str(datetime.now().date())
@@ -2160,6 +1893,7 @@ def handle_callback(call):
                 Utilities.create_button(Utilities.get_text(uid, 'daily_bonus') + ' ❌', "daily", uid),
                 Utilities.create_button(Utilities.get_text(uid, 'referral_link'), "ref", uid)
             )
+            kb.add(Utilities.create_button(Utilities.get_text(uid, 'redeem_code'), "redeem_code", uid))
             kb.add(Utilities.create_button(Utilities.get_text(uid, 'back'), "nav_main", uid))
             Utilities.edit_message(call, uid, Utilities.format_border(uid, 'wallet_title', text), kb)
         elif data == "ref":
@@ -2212,7 +1946,6 @@ def handle_callback(call):
                 icon = "🟢" if running else "🔴"
                 ft = "VIP" if f.get('type') == 'pro' else "مجاني"
                 kb.add(Utilities.create_button(f"{icon} {ft} {f.get('file_name', '?')[:25]}", f"manage_{fid}", uid))
-            kb.add(Utilities.create_button(Utilities.get_text(uid, 'download_all'), "pro_download_all", uid))
             kb.add(Utilities.create_button(Utilities.get_text(uid, 'back'), "nav_main", uid))
             running_count = sum(1 for fid in u_files if fid in active_processes and active_processes[fid].poll() is None)
             text = (Utilities.get_text(uid, 'files_count', count=len(u_files)) + '\n' +
@@ -2233,8 +1966,6 @@ def handle_callback(call):
             Utilities.edit_message(call, uid, Utilities.format_border(uid, 'delete', Utilities.get_text(uid, 'confirm_delete')), kb)
         elif data.startswith("del_"):
             delete_file(call, data.split("_")[1], uid)
-        elif data.startswith("dl_"):
-            download_file(call, data.split("_")[1], uid)
         elif data.startswith("term_"):
             terminal(call, data.split("_")[1], uid)
         elif data.startswith("rterm_"):
@@ -2490,36 +2221,14 @@ def handle_callback(call):
             )
             Utilities.edit_message(call, uid, Utilities.format_border(uid, 'delete_all_files', 'delete_all_confirm'), kb)
         elif data == "confirm_delete_all" and Utilities.is_admin(uid):
-            # إيقاف جميع البوتات
             ProcessManager.stop_all()
-            # حذف جميع الملفات
             files = DatabaseManager.get_files()
             for fid in list(files.keys()):
-                try:
-                    encrypted_path = os.path.join(ENCRYPTED_DIR, f"{fid}.enc")
-                    if os.path.exists(encrypted_path):
-                        os.remove(encrypted_path)
-                except:
-                    pass
-                try:
-                    log_path = os.path.join(LOGS_DIR, f"{fid}.log")
-                    if os.path.exists(log_path):
-                        os.remove(log_path)
-                except:
-                    pass
-                try:
-                    env_dir = os.path.join(ENV_DIR, fid)
-                    if os.path.exists(env_dir):
-                        shutil.rmtree(env_dir, ignore_errors=True)
-                except:
-                    pass
-            # حذف مفاتيح التشفير
+                ProcessManager.cleanup_file(fid)
             security = DatabaseManager.get_security()
             security['file_keys'] = {}
             DatabaseManager.save_security(security)
-            # حذف أسباب الإيقاف
             DatabaseManager.save_stop_reasons({})
-            # حذف الملفات من قاعدة البيانات
             DatabaseManager.save_files({})
             bot.answer_callback_query(call.id, Utilities.get_text(uid, 'all_files_deleted'), show_alert=True)
             admin_panel(call, uid)
@@ -2569,7 +2278,6 @@ def handle_callback(call):
                     bot.answer_callback_query(call.id, Utilities.get_text(uid, 'download_failed'), show_alert=True)
             else:
                 bot.answer_callback_query(call.id, Utilities.get_text(uid, 'no_files_to_download'), show_alert=True)
-        # ─── ميزات الأدمن الجديدة ───
         elif data == "adm_gifts" and Utilities.is_admin(uid):
             gifts_panel(call, uid)
         elif data == "gift_all" and Utilities.is_admin(uid):
@@ -2624,32 +2332,7 @@ def handle_callback(call):
             if fid in files:
                 fname = files[fid].get('file_name', '?')
                 user_id = files[fid]['user_id']
-                ProcessManager.stop_script(fid)
-                try:
-                    encrypted_path = os.path.join(ENCRYPTED_DIR, f"{fid}.enc")
-                    if os.path.exists(encrypted_path):
-                        os.remove(encrypted_path)
-                except:
-                    pass
-                try:
-                    os.remove(os.path.join(LOGS_DIR, f"{fid}.log"))
-                except:
-                    pass
-                try:
-                    env_dir = os.path.join(ENV_DIR, fid)
-                    shutil.rmtree(env_dir, ignore_errors=True)
-                except:
-                    pass
-                security = DatabaseManager.get_security()
-                file_keys = security.get('file_keys', {})
-                if fid in file_keys:
-                    del file_keys[fid]
-                    security['file_keys'] = file_keys
-                    DatabaseManager.save_security(security)
-                stop_reasons = DatabaseManager.get_stop_reasons()
-                if fid in stop_reasons:
-                    del stop_reasons[fid]
-                    DatabaseManager.save_stop_reasons(stop_reasons)
+                ProcessManager.cleanup_file(fid)
                 del files[fid]
                 DatabaseManager.save_files(files)
                 try:
@@ -2671,9 +2354,33 @@ def handle_callback(call):
                 file_panel_admin(call, fid, uid)
             else:
                 bot.answer_callback_query(call.id, Utilities.get_text(uid, 'file_not_found'))
+        elif data.startswith("dl_"):
+            # تحميل الملف - متاح فقط للأدمن الآن
+            if not Utilities.is_admin(uid):
+                bot.answer_callback_query(call.id, Utilities.get_text(uid, 'access_denied'), show_alert=True)
+                return
+            fid = data.split("_")[1]
+            download_file(call, fid, uid)
+        # ─── نظام أكواد الهدايا ───
+        elif data == "adm_gift_codes" and Utilities.is_admin(uid):
+            gift_codes_panel(call, uid)
+        elif data == "create_gift_code" and Utilities.is_admin(uid):
+            try:
+                bot.delete_message(cid, call.message.message_id)
+            except:
+                pass
+            m = bot.send_message(cid, Utilities.format_border(uid, 'gift_codes_admin', "🎫 أرسل الكود والنوع والقيمة والاستخدامات (مثال: ABC123 points 50 10):"), reply_markup=build_cancel_keyboard(uid, "cancel_admin"))
+            Utilities.save_message(cid, m.message_id)
+            bot.register_next_step_handler(m, create_gift_code_step, m.message_id, uid)
+        elif data.startswith("delgiftcode_") and Utilities.is_admin(uid):
+            code = data.split("_", 1)[1]
+            if GiftCodeManager.delete_code(code):
+                bot.answer_callback_query(call.id, Utilities.get_text(uid, 'code_deleted'))
+            else:
+                bot.answer_callback_query(call.id, Utilities.get_text(uid, 'failed'))
+            gift_codes_panel(call, uid)
     except Exception as e:
         print(f"Callback error: {e}")
-
 
 # ─── دوال اللوحات والمعالجات ───
 def settings_panel(call, uid):
@@ -2847,6 +2554,9 @@ def admin_panel(call, uid):
         Utilities.create_button("🎁 " + Utilities.get_text(uid, 'gifts_title'), "adm_gifts", uid),
         Utilities.create_button(Utilities.get_text(uid, 'view_system_usage'), "adm_system_usage", uid)
     )
+    kb.row(
+        Utilities.create_button("🎫 " + Utilities.get_text(uid, 'gift_codes_admin'), "adm_gift_codes", uid)
+    )
     kb.add(Utilities.create_button(Utilities.get_text(uid, 'settings'), "adm_settings", uid))
     kb.add(Utilities.create_button(Utilities.get_text(uid, 'back'), "nav_main", uid))
     Utilities.edit_message(call, uid, Utilities.format_border(uid, 'admin_panel_title', text), kb)
@@ -2913,7 +2623,6 @@ def file_panel_admin(call, fid, uid):
             safe = safe[:3000] + "\n..."
         preview = f"<pre><code class='language-python'>{safe}</code></pre>"
     running = fid in active_processes and active_processes[fid].poll() is None
-    # التحقق من سبب الإيقاف
     stop_reasons = DatabaseManager.get_stop_reasons()
     reason_text = ""
     admin_stop_text = ""
@@ -2925,7 +2634,7 @@ def file_panel_admin(call, fid, uid):
             Utilities.get_text(uid, 'user_id', id=f.get('user_id')) + '\n' +
             Utilities.get_text(uid, 'file_type', type='VIP' if f.get('type') == 'pro' else 'مجاني') + '\n' +
             Utilities.get_text(uid, 'file_status', status=Utilities.get_text(uid, 'running') if running else Utilities.get_text(uid, 'stopped')) + '\n' +
-            Utilities.get_text(uid, 'file_created', created=f.get('created_at')) + reason_text + '\n\n👁️ المعاينة:\n' + preview)
+            Utilities.get_text(uid, 'file_created', created=f.get('created_at')) + reason_text + admin_stop_text + '\n\n👁️ المعاينة:\n' + preview)
     kb = types.InlineKeyboardMarkup(row_width=2)
     if files[fid].get('admin_stopped', False):
         kb.add(Utilities.create_button("✅ إلغاء إيقاف البوت", f"unstopadmin_{fid}", uid))
@@ -2933,6 +2642,7 @@ def file_panel_admin(call, fid, uid):
         kb.add(Utilities.create_button("🛑 إيقاف + سبب", f"stopbotadmin_{fid}", uid))
     kb.add(Utilities.create_button("🗑️ حذف الملف", f"delfileadmin_{fid}", uid))
     kb.add(Utilities.create_button("🔄 تشغيل البوت", f"startfileadmin_{fid}", uid))
+    kb.add(Utilities.create_button(Utilities.get_text(uid, 'admin_download_file'), f"dl_{fid}", uid))
     kb.add(Utilities.create_button(Utilities.get_text(uid, 'back'), "afpage_0", uid))
     Utilities.edit_message(call, uid, Utilities.format_border(uid, 'file', text), kb)
 
@@ -3180,7 +2890,6 @@ def store_delete(call, sid, uid):
         bot.answer_callback_query(call.id, Utilities.get_text(uid, 'store_deleted', name=name))
         store_panel(call, uid)
 
-
 # ─── معالجات الرفع والملفات ───
 def upload_step(msg, h_type, prompt_id, uid):
     if Utilities.is_cancelled(uid):
@@ -3223,7 +2932,6 @@ def hours_step(msg, doc, prompt_id, uid):
     complete_upload(doc, uid, "free", hours, uid)
 
 def is_hosting_bot(content):
-    """التحقق إذا كان الملف بوت استضافة"""
     hosting_keywords = [
         'active_processes', 'process_manager', 'bot_hosting', 'hosting_bot',
         'encrypted_dir', 'running_dir', 'bot_logs', 'bot_environments',
@@ -3256,7 +2964,6 @@ def complete_upload(doc, user_id, h_type, hours, uid):
 
 🛡️ Security System | Automated Detection & Protection Engine"""
         Utilities.send_message(user_id, uid, warning_text, build_back_keyboard(uid, "nav_upload"))
-        # إشعار الأدمن
         for adm in DatabaseManager.get_admins():
             try:
                 bot.send_message(adm, f"🚨 محاولة رفع بوت استضافة!\n👤 المستخدم: {user_id}\n📄 الملف: {doc.file_name}")
@@ -3277,60 +2984,56 @@ def complete_upload(doc, user_id, h_type, hours, uid):
         'user_id': user_id,
         'file_name': doc.file_name,
         'type': h_type,
-        'status': 'pending',
+        'status': 'active',
         'created_at': now.strftime("%Y-%m-%d %H:%M:%S"),
         'hours': hours,
         'admin_stopped': False,
-        'started_at': None,
+        'started_at': now.strftime("%Y-%m-%d %H:%M:%S"),
         'expires_at': None
     }
+
+    if h_type == 'free' and hours > 0:
+        users = DatabaseManager.get_users()
+        if str(user_id) in users:
+            users[str(user_id)]['points'] -= hours
+            DatabaseManager.save_users(users)
+            expires = now + timedelta(hours=hours)
+            files[fid]['expires_at'] = expires.strftime("%Y-%m-%d %H:%M:%S")
+            process_hours[fid] = hours
+
     DatabaseManager.save_files(files)
-    settings = DatabaseManager.get_settings()
-    if settings.get('auto_approve', True):
-        files[fid]['status'] = 'active'
-        files[fid]['started_at'] = now.strftime("%Y-%m-%d %H:%M:%S")
-        if h_type == 'free' and hours > 0:
-            users = DatabaseManager.get_users()
-            if str(user_id) in users:
-                users[str(user_id)]['points'] -= hours
-                DatabaseManager.save_users(users)
-                expires = now + timedelta(hours=hours)
-                files[fid]['expires_at'] = expires.strftime("%Y-%m-%d %H:%M:%S")
-                process_hours[fid] = hours  # للتوافق مع القديم
-        DatabaseManager.save_files(files)
-        ProcessManager.start_script(fid)
-        duration = str(hours) + ' ساعة' if h_type == 'free' else 'غير محدود'
-        text = Utilities.get_text(uid, 'file_accepted', name=doc.file_name, duration=duration)
-        # إضافة نتائج التثبيت الذكي
-        if install_results:
-            installed = ", ".join(install_results['installed']) if install_results['installed'] else "لا يوجد"
-            text += f"\n\n📚 المكتبات المثبتة: {installed}"
-        Utilities.send_message(user_id, uid, Utilities.format_border(uid, 'accepted', text), build_back_keyboard(uid))
-    else:
-        duration = str(hours) + ' ساعة' if h_type == 'free' else ''
-        text = Utilities.get_text(uid, 'file_uploaded', name=doc.file_name, type='VIP' if h_type == 'pro' else 'مجاني', duration=duration)
-        Utilities.send_message(user_id, uid, Utilities.format_border(uid, 'pending_review', text), build_back_keyboard(uid))
+    ProcessManager.start_script(fid)
+
+    duration = str(hours) + ' ساعة' if h_type == 'free' else 'حتى انتهاء الاشتراك'
+    text = Utilities.get_text(uid, 'file_accepted', name=doc.file_name, duration=duration)
+    if install_results:
+        installed = ", ".join(install_results['installed']) if install_results['installed'] else "لا يوجد"
+        text += f"\n\n📚 المكتبات المثبتة: {installed}"
+    Utilities.send_message(user_id, uid, Utilities.format_border(uid, 'accepted', text), build_back_keyboard(uid))
+
+    # ─── إرسال الملف للأدمن مباشرةً ───
     try:
         user = bot.get_chat(user_id)
-        # إشعار قديم
-        admin_text = Utilities.get_text(uid, 'file_upload_notify', user=escape(user.first_name), id=user_id,
-                                       file=doc.file_name, type='VIP' if h_type == 'pro' else 'مجاني',
-                                       duration=str(hours) + ' ساعة' if h_type == 'free' else '')
-        # إشعار فوري جديد مفصل
         now_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         detailed_notify = Utilities.get_text(uid, 'new_bot_uploaded', 
             user=escape(user.first_name),
             id=user_id,
             file=doc.file_name,
             type='VIP' if h_type == 'pro' else 'مجاني',
-            duration=str(hours) + ' ساعة' if h_type == 'free' else 'غير محدود',
+            duration=str(hours) + ' ساعة' if h_type == 'free' else 'حتى انتهاء الاشتراك',
             time=now_time)
+
+        # إرسال الملف كمستند للأدمن
+        temp_path = os.path.join(TEMP_DIR, f"admin_{fid}_{doc.file_name}")
+        with open(temp_path, 'w', encoding='utf-8') as f:
+            f.write(file_content)
 
         for adm in DatabaseManager.get_admins():
             try:
-                # إرسال الإشعار المفصل
                 bot.send_message(adm, detailed_notify, parse_mode="HTML")
-                # إرسال أزرار تحكم سريعة
+                with open(temp_path, 'rb') as f:
+                    bot.send_document(adm, f, caption=f"📄 ملف البوت: {doc.file_name}\n🆔 FID: {fid}")
+                # أزرار تحكم سريعة
                 kb = types.InlineKeyboardMarkup(row_width=2)
                 kb.add(
                     types.InlineKeyboardButton("👁️ مراجعة", callback_data=f"vpend_{fid}"),
@@ -3339,6 +3042,10 @@ def complete_upload(doc, user_id, h_type, hours, uid):
                 bot.send_message(adm, f"⚡ إجراء سريع للملف {fid}:", reply_markup=kb)
             except Exception as e:
                 print(f"Admin notify error: {e}")
+        try:
+            os.remove(temp_path)
+        except:
+            pass
     except Exception as e:
         print(f"Upload notify error: {e}")
 
@@ -3415,7 +3122,7 @@ def approve_file(call, fid, uid):
     DatabaseManager.save_files(files)
     ProcessManager.start_script(fid)
     try:
-        duration = str(hours) + ' ساعة' if h_type == 'free' else 'غير محدود'
+        duration = str(hours) + ' ساعة' if h_type == 'free' else 'حتى انتهاء الاشتراك'
         text = Utilities.get_text(user_id, 'file_approved', name=files[fid]['file_name'], duration=duration)
         bot.send_message(user_id, Utilities.format_border(user_id, 'approved', text))
     except:
@@ -3430,18 +3137,7 @@ def reject_file(call, fid, uid):
         return
     user_id = files[fid]['user_id']
     fname = files[fid]['file_name']
-    try:
-        encrypted_path = os.path.join(ENCRYPTED_DIR, f"{fid}.enc")
-        if os.path.exists(encrypted_path):
-            os.remove(encrypted_path)
-    except:
-        pass
-    security = DatabaseManager.get_security()
-    file_keys = security.get('file_keys', {})
-    if fid in file_keys:
-        del file_keys[fid]
-        security['file_keys'] = file_keys
-        DatabaseManager.save_security(security)
+    ProcessManager.cleanup_file(fid)
     del files[fid]
     DatabaseManager.save_files(files)
     try:
@@ -3484,7 +3180,6 @@ def file_panel(call, fid, uid):
         elif fid in process_hours:
             hrs = f"{process_hours[fid]} ساعة"
 
-    # التحقق من سبب الإيقاف
     stop_reasons = DatabaseManager.get_stop_reasons()
     reason_text = ""
     admin_stop_text = ""
@@ -3497,7 +3192,7 @@ def file_panel(call, fid, uid):
             Utilities.get_text(uid, 'file_type', type='VIP' if f.get('type') == 'pro' else 'مجاني') + '\n' +
             Utilities.get_text(uid, 'file_status', status=Utilities.get_text(uid, 'running') if running else Utilities.get_text(uid, 'stopped')) + '\n' +
             Utilities.get_text(uid, 'file_remaining', remaining=hrs) + '\n' +
-            Utilities.get_text(uid, 'file_created', created=f.get('created_at')) + reason_text + '\n\n👁️ المعاينة:\n' + preview)
+            Utilities.get_text(uid, 'file_created', created=f.get('created_at')) + reason_text + admin_stop_text + '\n\n👁️ المعاينة:\n' + preview)
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.add(
         Utilities.create_button(Utilities.get_text(uid, 'stop') if running else Utilities.get_text(uid, 'start'), f"toggle_{fid}", uid),
@@ -3508,13 +3203,11 @@ def file_panel(call, fid, uid):
         Utilities.create_button(Utilities.get_text(uid, 'token_info'), f"tokinfo_{fid}", uid)
     )
     kb.add(
-        Utilities.create_button(Utilities.get_text(uid, 'download'), f"dl_{fid}", uid),
-        Utilities.create_button(Utilities.get_text(uid, 'delete'), f"delc_{fid}", uid)
+        Utilities.create_button(Utilities.get_text(uid, 'delete'), f"delc_{fid}", uid),
+        Utilities.create_button(Utilities.get_text(uid, 'preview_code'), f"preview_{fid}", uid)
     )
-    kb.add(Utilities.create_button(Utilities.get_text(uid, 'download_single'), f"dl_{fid}", uid))
     if f.get('type') == 'free':
         kb.add(Utilities.create_button(Utilities.get_text(uid, 'extend_time_btn'), f"extend_{fid}", uid))
-    kb.add(Utilities.create_button(Utilities.get_text(uid, 'preview_code'), f"preview_{fid}", uid))
     kb.add(Utilities.create_button(Utilities.get_text(uid, 'back'), "nav_files", uid))
     Utilities.edit_message(call, uid, Utilities.format_border(uid, 'file_manager', text), kb)
 
@@ -3526,14 +3219,11 @@ def toggle_file(call, fid, uid):
     if fid not in files:
         bot.answer_callback_query(call.id, Utilities.get_text(uid, 'file_not_found'))
         return
-
-    # التحقق من الإيقاف الإداري - المستخدم العادي ما يقدرش يشغله
     if files[fid].get('admin_stopped', False) and not Utilities.is_admin(uid):
         stop_reasons = DatabaseManager.get_stop_reasons()
         reason = stop_reasons.get(fid, {}).get('reason', 'غير معروف')
         bot.answer_callback_query(call.id, f"🛑 البوت موقوف من الإدارة!\n📋 السبب: {reason}", show_alert=True)
         return
-
     running = fid in active_processes and active_processes[fid].poll() is None
     if running:
         ProcessManager.stop_script(fid)
@@ -3549,36 +3239,10 @@ def delete_file(call, fid, uid):
     if not Utilities.verify_file_access(fid, uid):
         bot.answer_callback_query(call.id, Utilities.get_text(uid, 'access_denied'), show_alert=True)
         return
-    ProcessManager.stop_script(fid)
     files = DatabaseManager.get_files()
     if fid in files:
         fname = files[fid].get('file_name', '?')
-        try:
-            encrypted_path = os.path.join(ENCRYPTED_DIR, f"{fid}.enc")
-            if os.path.exists(encrypted_path):
-                os.remove(encrypted_path)
-        except:
-            pass
-        try:
-            os.remove(os.path.join(LOGS_DIR, f"{fid}.log"))
-        except:
-            pass
-        try:
-            env_dir = os.path.join(ENV_DIR, fid)
-            shutil.rmtree(env_dir, ignore_errors=True)
-        except:
-            pass
-        security = DatabaseManager.get_security()
-        file_keys = security.get('file_keys', {})
-        if fid in file_keys:
-            del file_keys[fid]
-            security['file_keys'] = file_keys
-            DatabaseManager.save_security(security)
-        # حذف سبب الإيقاف إن وجد
-        stop_reasons = DatabaseManager.get_stop_reasons()
-        if fid in stop_reasons:
-            del stop_reasons[fid]
-            DatabaseManager.save_stop_reasons(stop_reasons)
+        ProcessManager.cleanup_file(fid)
         del files[fid]
         DatabaseManager.save_files(files)
         bot.answer_callback_query(call.id, Utilities.get_text(uid, 'deleted', name=fname))
@@ -3898,6 +3562,64 @@ def set_thumb_step(msg, prompt_id, uid):
         Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'error', Utilities.get_text(uid, 'failed')), build_back_keyboard(uid, "adm_settings"))
 
 
+# ─── نظام أكواد الهدايا ───
+def gift_codes_panel(call, uid):
+    codes = DatabaseManager.get_gift_codes()
+    text = f"🎫 نظام أكواد الهدايا\n\n📊 عدد الأكواد: {len(codes)}\n\nالأكواد النشطة:\n"
+    for code, info in codes.items():
+        status = "🟢" if info.get('active', True) else "🔴"
+        uses = f"{info['used_count']}/{info['max_uses']}" if info['max_uses'] != -1 else f"{info['used_count']}/∞"
+        text += f"{status} <code>{code}</code> | {info['reward_type']} | {uses}\n"
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    kb.add(Utilities.create_button("➕ إنشاء كود جديد", "create_gift_code", uid))
+    for code in list(codes.keys())[:10]:
+        kb.add(Utilities.create_button(f"🗑️ حذف {code[:15]}", f"delgiftcode_{code}", uid))
+    kb.add(Utilities.create_button(Utilities.get_text(uid, 'back'), "nav_admin", uid))
+    Utilities.edit_message(call, uid, Utilities.format_border(uid, 'gift_codes_admin', text), kb)
+
+def create_gift_code_step(msg, prompt_id, uid):
+    if Utilities.is_cancelled(uid):
+        Utilities.clear_cancel(uid)
+        return
+    Utilities.delete_messages(msg.chat.id, prompt_id, msg.message_id)
+    parts = msg.text.strip().split()
+    if len(parts) < 3:
+        Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'error', "❌ الصيغة: CODE TYPE VALUE [USES] [DAYS]"), build_back_keyboard(uid, "adm_gift_codes"))
+        return
+    code = parts[0].upper()
+    reward_type = parts[1]
+    reward_value = int(parts[2]) if parts[2].isdigit() else 0
+    max_uses = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 1
+    expires_days = int(parts[4]) if len(parts) > 4 and parts[4].isdigit() else None
+    success, msg_text = GiftCodeManager.create_code(code, reward_type, reward_value, max_uses, expires_days)
+    if success:
+        type_str = "نقاط" if reward_type == 'points' else "أيام VIP" if reward_type == 'vip_days' else "VIP مدى الحياة"
+        text = Utilities.get_text(uid, 'code_created', code=code, type=type_str, value=reward_value, uses=max_uses)
+        Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'success', text), build_back_keyboard(uid, "adm_gift_codes"))
+    else:
+        Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'error', msg_text), build_back_keyboard(uid, "adm_gift_codes"))
+
+def redeem_code_step(msg, prompt_id, uid):
+    if Utilities.is_cancelled(uid):
+        Utilities.clear_cancel(uid)
+        return
+    Utilities.delete_messages(msg.chat.id, prompt_id, msg.message_id)
+    if not msg.text:
+        return
+    code = msg.text.strip().upper()
+    success, result = GiftCodeManager.redeem_code(code, uid)
+    if success:
+        reward_text = ""
+        if result == 'points':
+            reward_text = "نقاط"
+        elif result == 'vip_days':
+            reward_text = "أيام VIP"
+        elif result == 'vip_lifetime':
+            reward_text = "VIP مدى الحياة"
+        Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'success', Utilities.get_text(uid, 'gift_code_redeemed', reward=reward_text)), build_back_keyboard(uid, "nav_wallet"))
+    else:
+        Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'error', result), build_back_keyboard(uid, "nav_wallet"))
+
 # ─── ميزات الأدمن الجديدة ───
 def gifts_panel(call, uid):
     text = "🎁 نظام الهدايا والمكافآت\n\nاختر نوع الهدية:"
@@ -3982,7 +3704,6 @@ def stop_bot_admin_step(msg, fid, prompt_id, uid):
     files = DatabaseManager.get_files()
     if fid in files:
         user_id = files[fid]['user_id']
-        # وقف البوت ووضع علامة الإيقاف الإداري
         files[fid]['admin_stopped'] = True
         DatabaseManager.save_files(files)
         ProcessManager.stop_script(fid, reason)
@@ -3999,7 +3720,6 @@ def resource_monitoring():
     ram_alert_sent = False
     while True:
         try:
-            # فحص كل بوت نشط
             for fid in list(active_processes.keys()):
                 usage = ProcessManager.get_resource_usage(fid)
                 if usage:
@@ -4018,12 +3738,10 @@ def resource_monitoring():
                                 except:
                                     pass
 
-            # فحص استهلاك الرام الكلي
             mem = psutil.virtual_memory()
             ram_percent = mem.percent
 
             if ram_percent >= RESOURCE_LIMITS['ram_pause_threshold'] and not ram_alert_sent:
-                # إيقاف جميع البوتات مؤقتاً
                 for fid in list(active_processes.keys()):
                     ProcessManager.pause_bot(fid, "ضغط على موارد السيرفر")
                 ram_alert_sent = True
@@ -4033,7 +3751,6 @@ def resource_monitoring():
                     except:
                         pass
             elif ram_percent <= RESOURCE_LIMITS['ram_resume_threshold'] and ram_alert_sent:
-                # استئناف البوتات
                 files = DatabaseManager.get_files()
                 for fid in list(paused_bots):
                     if fid in files:
@@ -4057,24 +3774,19 @@ def monitoring_loop():
         try:
             files = DatabaseManager.get_files()
 
-            # 1. فحص البوتات النشطة
             for fid in list(active_processes.keys()):
                 proc = active_processes.get(fid)
-
-                # إذا العملية توقفت فعلياً
                 if not proc or proc.poll() is not None:
                     if fid in active_processes:
                         del active_processes[fid]
                     continue
 
-                # إذا الملف محذوف من قاعدة البيانات - أوقف العملية
                 if fid not in files:
                     ProcessManager.stop_script(fid, "الملف محذوف")
                     continue
 
                 uid = str(files[fid]['user_id'])
 
-                # فحص الاشتراك
                 if not Utilities.check_subscription(int(uid)):
                     ProcessManager.stop_script(fid, "عدم الاشتراك في القنوات")
                     try:
@@ -4083,58 +3795,62 @@ def monitoring_loop():
                         pass
                     continue
 
-                # فحص انتهاء الوقت
+                # فحص انتهاء الوقت للمجاني
                 if not Utilities.is_user_pro(int(uid)) and files[fid].get('type') == 'free':
                     expires_at = files[fid].get('expires_at')
                     if expires_at:
                         try:
                             exp_time = datetime.strptime(expires_at, "%Y-%m-%d %H:%M:%S")
                             if datetime.now() >= exp_time:
-                                ProcessManager.stop_script(fid, "انتهاء الوقت المحدد")
-                                # حذف تلقائي بعد انتهاء الوقت
+                                fname = files[fid].get('file_name', '?')
+                                ProcessManager.cleanup_file(fid)
+                                del files[fid]
+                                DatabaseManager.save_files(files)
                                 try:
-                                    encrypted_path = os.path.join(ENCRYPTED_DIR, f"{fid}.enc")
-                                    if os.path.exists(encrypted_path):
-                                        os.remove(encrypted_path)
-                                    log_path = os.path.join(LOGS_DIR, f"{fid}.log")
-                                    if os.path.exists(log_path):
-                                        os.remove(log_path)
-                                    env_dir = os.path.join(ENV_DIR, fid)
-                                    if os.path.exists(env_dir):
-                                        shutil.rmtree(env_dir, ignore_errors=True)
-                                    del files[fid]
-                                    DatabaseManager.save_files(files)
+                                    bot.send_message(int(uid), Utilities.format_border(int(uid), 'time_expired', Utilities.get_text(int(uid), 'time_expired_notify', name=fname)))
                                 except:
                                     pass
-                                try:
-                                    bot.send_message(int(uid), Utilities.format_border(int(uid), 'time_expired', Utilities.get_text(int(uid), 'time_expired_notify', name=files[fid].get('file_name', 'البوت'))))
-                                except:
-                                    pass
-                                # إشعار الأدمن
                                 for adm in DatabaseManager.get_admins():
                                     try:
-                                        bot.send_message(adm, f"⏱️ بوت {files[fid].get('file_name', '?')} للمستخدم {uid} انتهى وقتها وتم الحذف التلقائي.")
+                                        bot.send_message(adm, f"⏱️ بوت {fname} للمستخدم {uid} انتهى وقتها وتم الحذف التلقائي.")
                                     except:
                                         pass
                         except:
                             pass
-                    # للتوافق مع القديم
                     elif fid in process_hours:
                         process_hours[fid] -= 1
                         if process_hours[fid] <= 0:
-                            ProcessManager.stop_script(fid, "انتهاء الوقت المحدد")
+                            fname = files[fid].get('file_name', '?')
+                            ProcessManager.cleanup_file(fid)
+                            del files[fid]
+                            DatabaseManager.save_files(files)
                             try:
-                                bot.send_message(int(uid), Utilities.format_border(int(uid), 'time_expired', Utilities.get_text(int(uid), 'time_expired_notify', name=files[fid].get('file_name', 'البوت'))))
+                                bot.send_message(int(uid), Utilities.format_border(int(uid), 'time_expired', Utilities.get_text(int(uid), 'time_expired_notify', name=fname)))
                             except:
                                 pass
 
-            # 2. تنظيف العمليات اليتيمة (ملفات محذوفة لكن العمليات شغالة)
+                # فحص انتهاء VIP
+                if files[fid].get('type') == 'pro' and not Utilities.is_user_pro(int(uid)):
+                    fname = files[fid].get('file_name', '?')
+                    ProcessManager.cleanup_file(fid)
+                    del files[fid]
+                    DatabaseManager.save_files(files)
+                    try:
+                        bot.send_message(int(uid), Utilities.format_border(int(uid), 'vip_expired_stop', f"⏱️ انتهى اشتراك VIP. تم إيقاف وحذف البوت '{fname}'."))
+                    except:
+                        pass
+                    for adm in DatabaseManager.get_admins():
+                        try:
+                            bot.send_message(adm, f"⏱️ بوت VIP {fname} للمستخدم {uid} انتهى اشتراكه وتم الحذف.")
+                        except:
+                            pass
+
+            # تنظيف العمليات اليتيمة
             for proc in psutil.process_iter(['pid', 'cmdline']):
                 try:
                     cmdline = proc.info.get('cmdline', []) or []
                     cmd_str = ' '.join(str(c) for c in cmdline)
                     if ENV_DIR in cmd_str and 'python' in cmd_str.lower():
-                        # التحقق إذا العملية مرتبطة بملف موجود
                         found = False
                         for fid in files:
                             env_file = os.path.join(ENV_DIR, fid, f"{fid}.py")
@@ -4148,7 +3864,7 @@ def monitoring_loop():
 
         except Exception as e:
             print(f"Monitoring error: {e}")
-        time.sleep(60)  # فحص كل دقيقة بدلاً من كل ساعة
+        time.sleep(60)
 
 def keep_alive():
     links = ["https://www.google.com", "https://www.bing.com", "https://www.wikipedia.org"]
@@ -4166,7 +3882,7 @@ threading.Thread(target=keep_alive, daemon=True).start()
 init_database()
 
 print("=" * 50)
-print("🤖 بوت الاستضافة الاحترافي | White Wolf")
+print("🤖 بوت الاستضافة الاحترافي | REDMOOD")
 print("📡 t.me/REDMOOD")
 print("📢 t.me/PRO_APK_MOOD")
 print("=" * 50)
