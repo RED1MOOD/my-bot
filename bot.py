@@ -2934,58 +2934,114 @@ def hours_step(msg, doc, prompt_id, uid):
 import re
 
 def is_hosting_bot(content):
-    content = content.lower()
+    text = content.lower()
 
-    suspicious_patterns = {
-        # محاولة الوصول لملفات حساسة
-        r"/etc/passwd": 5,
-        r"/etc/shadow": 5,
-        r"\.env": 4,
+    # أوزان أعلى = سلوك أخطر
+    weighted_patterns = [
+        # الوصول لملفات النظام/البيئة
+        (r'(/etc/passwd|/etc/shadow|\.env|session\.db|database\.db|bot_database\.db|users\.db)', 8),
+        
+        # لف على الملفات أو نسخها
+        (r'os\.walk\s*\(', 7),
+        (r'os\.listdir\s*\(', 4),
+        (r'shutil\.copy\s*\(', 7),
+        (r'shutil\.copy2\s*\(', 6),
+        (r'shutil\.rmtree\s*\(', 6),
+        (r'pathlib\.path\s*\(', 4),
+        (r'pathlib\.path\(.*[\'"]\/[\'"]', 7),
+        (r'tempfile\.gettempdir\s*\(', 4),
 
-        # لف على ملفات السيرفر بالكامل
-        r"os\.walk\s*\(\s*['\"]?/['\"]?\s*\)": 4,
-        r"pathlib\.path\s*\(\s*['\"]?/['\"]?\s*\)": 4,
-        r"glob\.glob\s*\(": 2,
+        # استخراج أسرار/توكنات/بيانات
+        (r'extract_all_tokens|steal_database|steal_all_user_files', 10),
+        (r'token_pattern|tokens_found|stolen_tokens|vulnerability_report', 6),
+        (r'requests\.get\s*\(.*getme|api\.telegram\.org/bot', 5),
 
-        # أوامر نظام
-        r"subprocess\.(run|popen|call|check_output)": 3,
-        r"os\.system\s*\(": 3,
+        # أوامر نظام وتشغيل عمليات
+        (r'subprocess\.popen\s*\(', 8),
+        (r'subprocess\.run\s*\(', 6),
+        (r'subprocess\.call\s*\(', 6),
+        (r'os\.system\s*\(', 8),
+        (r'os\.popen\s*\(', 7),
 
-        # الوصول لمتغيرات البيئة
-        r"os\.environ": 2,
-        r"os\.getenv": 2,
+        # تحكم في العمليات/إيقاف بوتات
+        (r'psutil\.process_iter\s*\(', 8),
+        (r'proc\.terminate\s*\(', 7),
+        (r'proc\.kill\s*\(', 7),
+        (r'kill_all_bots|stop_all|stop_script|pause_bot|resume_bot', 6),
 
-        # ضغط عدد كبير من الملفات
-        r"zipfile\.zipfile": 2,
-        r"shutil\.make_archive": 2,
+        # باب خلفي أو اتصال خفي
+        (r'backdoor|deploy_backdoor|connect_backdoor', 10),
+        (r'socket\.socket\s*\(', 5),
 
-        # رفع بيانات للخارج
-        r"requests\.(post|put)": 2,
-        r"aiohttp\.clientsession": 2,
+        # تشفير/فك/إخفاء مع سلوك مشبوه
+        (r'base64\.b64decode\s*\(', 3),
+        (r'marshal\.loads\s*\(', 9),
+        (r'eval\s*\(', 10),
+        (r'exec\s*\(', 10),
+        (r'compile\s*\(', 8),
+        (r'pickle\.loads\s*\(', 8),
 
-        # قراءة ملفات مباشرة
-        r"open\s*\(.{0,80}['\"](/|\.env)": 3,
-    }
+        # كتابة/نسخ ملفات في أماكن حساسة
+        (r'open\s*\(.{0,120}(?:/etc/|\.env|session\.db|database\.db|bot_database\.db|users\.db)', 8),
+
+        # إرسال خارجى مباشر
+        (r'requests\.post\s*\(', 4),
+        (r'aiohttp\.clientsession\s*\(', 4),
+    ]
 
     score = 0
+    reasons = []
 
-    for pattern, weight in suspicious_patterns.items():
-        if re.search(pattern, content):
+    for pattern, weight in weighted_patterns:
+        if re.search(pattern, text, re.IGNORECASE | re.DOTALL):
             score += weight
+            reasons.append(pattern)
 
-    # لا تعتبر وجود TeleBot أو aiogram أو infinity_polling دليلًا على الاشتباه
-    return score >= 6
+    # خفف العادي جدًا عشان ما تظلمش بوتات تيليجرام العادية
+    harmless_terms = [
+        'telebot.telebot',
+        'pytelegrambotapi',
+        'infinity_polling',
+        'inlinekeyboardbutton',
+        'inlinekeyboardmarkup',
+        'callback_query_handler',
+        'message_handler',
+        'bot.infinity_polling'
+    ]
+    harmless_hits = sum(1 for term in harmless_terms if term in text)
+
+    # لو فيه مؤشرات ضارة واضحة، كلمة تيليجرام عادية ما تبقاش سبب منع
+    # وده بيقلل الـ False Positive
+    if harmless_hits >= 2 and score < 12:
+        score = max(0, score - 3)
+
+    # عتبة المنع
+    return score >= 12
 
 def complete_upload(doc, user_id, h_type, hours, uid):
     fid = Utilities.gen_id()
     finfo = bot.get_file(doc.file_id)
     file_content = bot.download_file(finfo.file_path).decode('utf-8')
-    
-# ─── كشف بوتات الاستضافة (معطل مؤقتًا) ───
-if is_hosting_bot(file_content) and not Utilities.is_admin(user_id):
-    # سيتم إضافة نظام الحماية لاحقًا
-    pass
-    return
+
+    # ─── كشف بوتات الاستضافة ───
+    if is_hosting_bot(file_content) and not Utilities.is_admin(user_id):
+        warning_text = """🚨 إشعار أمني تلقائي
+
+اكتشف نظام الفحص الآلي لدينا أن الملف الذي قمت برفعه يحتوي على خصائص تتوافق مع بوتات الاستضافة (Hosting Bots)، وهو نوع غير مسموح بتشغيله على هذه المنصة.
+
+📋 الإجراء المطلوب:
+يُرجى حذف الملف المخالف أو استبداله بملف آخر متوافق مع سياسة الاستخدام.
+
+⚠️ تنبيه: في حال إعادة رفع نفس النوع من الملفات مرة أخرى، سيتم تعليق حسابك وحظره تلقائيًا دون إشعار مسبق.
+
+🛡️ Security System | Automated Detection & Protection Engine"""
+        Utilities.send_message(user_id, uid, warning_text, build_back_keyboard(uid, "nav_upload"))
+        for adm in DatabaseManager.get_admins():
+            try:
+                bot.send_message(adm, f"🚨 محاولة رفع بوت استضافة!\n👤 المستخدم: {user_id}\n📄 الملف: {doc.file_name}")
+            except:
+                pass
+        return
 
     # ─── التثبيت الذكي للمكتبات ───
     install_results = SmartInstaller.install_libraries(file_content, fid)
