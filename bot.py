@@ -879,31 +879,78 @@ class ProcessManager:
 
     @staticmethod
     def stop_script(fid, reason=None):
+        stopped = False
+        # 1. إيقاف العملية من active_processes
         if fid in active_processes:
             proc = active_processes[fid]
             try:
-                os.killpg(os.getpgid(proc.pid), 9)
-            except:
+                # محاولة قتل مجموعة العملية
                 try:
-                    proc.terminate()
+                    os.killpg(os.getpgid(proc.pid), 9)
                 except:
                     pass
-            del active_processes[fid]
-            if fid in process_hours:
-                del process_hours[fid]
-            if fid in process_resources:
-                del process_resources[fid]
-            # حفظ سبب الإيقاف
-            if reason:
-                stop_reasons = DatabaseManager.get_stop_reasons()
-                stop_reasons[fid] = {
-                    'reason': reason,
-                    'time': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    'stopped_by': 'system'
-                }
-                DatabaseManager.save_stop_reasons(stop_reasons)
-            return True
-        return False
+                # إذا لم تقتل، حاول terminate
+                try:
+                    proc.terminate()
+                    proc.wait(timeout=3)
+                except:
+                    pass
+                # إذا لم تتوقف، kill -9
+                try:
+                    proc.kill()
+                    proc.wait(timeout=2)
+                except:
+                    pass
+                # التأكد من أن العملية توقفت باستخدام psutil
+                try:
+                    p = psutil.Process(proc.pid)
+                    p.kill()
+                    p.wait(timeout=2)
+                except:
+                    pass
+            except:
+                pass
+            finally:
+                if fid in active_processes:
+                    del active_processes[fid]
+                stopped = True
+
+        # 2. إيقاف أي عملية أخرى مرتبطة بالملف (حتى لو مش في active_processes)
+        try:
+            files = DatabaseManager.get_files()
+            if fid in files:
+                env_dir = os.path.join(ENV_DIR, fid)
+                env_file = os.path.join(env_dir, f"{fid}.py")
+                for proc in psutil.process_iter(['pid', 'cmdline']):
+                    try:
+                        cmdline = proc.info.get('cmdline', []) or []
+                        if any(env_file in str(arg) for arg in cmdline):
+                            proc.kill()
+                            proc.wait(timeout=2)
+                    except:
+                        pass
+        except:
+            pass
+
+        # 3. تنظيف الموارد
+        if fid in process_hours:
+            del process_hours[fid]
+        if fid in process_resources:
+            del process_resources[fid]
+        if fid in paused_bots:
+            paused_bots.discard(fid)
+
+        # 4. حفظ سبب الإيقاف
+        if reason:
+            stop_reasons = DatabaseManager.get_stop_reasons()
+            stop_reasons[fid] = {
+                'reason': reason,
+                'time': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                'stopped_by': 'system'
+            }
+            DatabaseManager.save_stop_reasons(stop_reasons)
+
+        return stopped
 
     @staticmethod
     def pause_bot(fid, reason="ضغط على موارد السيرفر"):
@@ -2165,8 +2212,7 @@ def handle_callback(call):
                 icon = "🟢" if running else "🔴"
                 ft = "VIP" if f.get('type') == 'pro' else "مجاني"
                 kb.add(Utilities.create_button(f"{icon} {ft} {f.get('file_name', '?')[:25]}", f"manage_{fid}", uid))
-            if Utilities.is_user_pro(uid):
-                kb.add(Utilities.create_button(Utilities.get_text(uid, 'download_all'), "pro_download_all", uid))
+            kb.add(Utilities.create_button(Utilities.get_text(uid, 'download_all'), "pro_download_all", uid))
             kb.add(Utilities.create_button(Utilities.get_text(uid, 'back'), "nav_main", uid))
             running_count = sum(1 for fid in u_files if fid in active_processes and active_processes[fid].poll() is None)
             text = (Utilities.get_text(uid, 'files_count', count=len(u_files)) + '\n' +
@@ -2435,6 +2481,47 @@ def handle_callback(call):
         elif data == "stop_all" and Utilities.is_admin(uid):
             ProcessManager.stop_all()
             bot.answer_callback_query(call.id, Utilities.get_text(uid, 'all_stopped'))
+            admin_panel(call, uid)
+        elif data == "delete_all_files" and Utilities.is_admin(uid):
+            kb = types.InlineKeyboardMarkup(row_width=2)
+            kb.add(
+                Utilities.create_button("✅ نعم، احذف الكل", "confirm_delete_all", uid),
+                Utilities.create_button("❌ إلغاء", "nav_admin", uid)
+            )
+            Utilities.edit_message(call, uid, Utilities.format_border(uid, 'delete_all_files', 'delete_all_confirm'), kb)
+        elif data == "confirm_delete_all" and Utilities.is_admin(uid):
+            # إيقاف جميع البوتات
+            ProcessManager.stop_all()
+            # حذف جميع الملفات
+            files = DatabaseManager.get_files()
+            for fid in list(files.keys()):
+                try:
+                    encrypted_path = os.path.join(ENCRYPTED_DIR, f"{fid}.enc")
+                    if os.path.exists(encrypted_path):
+                        os.remove(encrypted_path)
+                except:
+                    pass
+                try:
+                    log_path = os.path.join(LOGS_DIR, f"{fid}.log")
+                    if os.path.exists(log_path):
+                        os.remove(log_path)
+                except:
+                    pass
+                try:
+                    env_dir = os.path.join(ENV_DIR, fid)
+                    if os.path.exists(env_dir):
+                        shutil.rmtree(env_dir, ignore_errors=True)
+                except:
+                    pass
+            # حذف مفاتيح التشفير
+            security = DatabaseManager.get_security()
+            security['file_keys'] = {}
+            DatabaseManager.save_security(security)
+            # حذف أسباب الإيقاف
+            DatabaseManager.save_stop_reasons({})
+            # حذف الملفات من قاعدة البيانات
+            DatabaseManager.save_files({})
+            bot.answer_callback_query(call.id, Utilities.get_text(uid, 'all_files_deleted'), show_alert=True)
             admin_panel(call, uid)
         elif data == "toggle_auto" and Utilities.is_admin(uid):
             new_state = not settings.get('auto_approve', True)
@@ -2752,6 +2839,9 @@ def admin_panel(call, uid):
     kb.row(
         Utilities.create_button(Utilities.get_text(uid, 'all_files'), "adm_files", uid),
         Utilities.create_button(Utilities.get_text(uid, 'stop_all'), "stop_all", uid)
+    )
+    kb.row(
+        Utilities.create_button(Utilities.get_text(uid, 'delete_all_files'), "delete_all_files", uid)
     )
     kb.row(
         Utilities.create_button("🎁 " + Utilities.get_text(uid, 'gifts_title'), "adm_gifts", uid),
@@ -3222,16 +3312,35 @@ def complete_upload(doc, user_id, h_type, hours, uid):
         Utilities.send_message(user_id, uid, Utilities.format_border(uid, 'pending_review', text), build_back_keyboard(uid))
     try:
         user = bot.get_chat(user_id)
+        # إشعار قديم
         admin_text = Utilities.get_text(uid, 'file_upload_notify', user=escape(user.first_name), id=user_id,
                                        file=doc.file_name, type='VIP' if h_type == 'pro' else 'مجاني',
                                        duration=str(hours) + ' ساعة' if h_type == 'free' else '')
+        # إشعار فوري جديد مفصل
+        now_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        detailed_notify = Utilities.get_text(uid, 'new_bot_uploaded', 
+            user=escape(user.first_name),
+            id=user_id,
+            file=doc.file_name,
+            type='VIP' if h_type == 'pro' else 'مجاني',
+            duration=str(hours) + ' ساعة' if h_type == 'free' else 'غير محدود',
+            time=now_time)
+
         for adm in DatabaseManager.get_admins():
             try:
-                bot.send_message(adm, admin_text, parse_mode="HTML")
-            except:
-                pass
-    except:
-        pass
+                # إرسال الإشعار المفصل
+                bot.send_message(adm, detailed_notify, parse_mode="HTML")
+                # إرسال أزرار تحكم سريعة
+                kb = types.InlineKeyboardMarkup(row_width=2)
+                kb.add(
+                    types.InlineKeyboardButton("👁️ مراجعة", callback_data=f"vpend_{fid}"),
+                    types.InlineKeyboardButton("🗑️ حذف", callback_data=f"delfileadmin_{fid}")
+                )
+                bot.send_message(adm, f"⚡ إجراء سريع للملف {fid}:", reply_markup=kb)
+            except Exception as e:
+                print(f"Admin notify error: {e}")
+    except Exception as e:
+        print(f"Upload notify error: {e}")
 
 def pending_list(call, uid):
     files = DatabaseManager.get_files()
@@ -3402,6 +3511,7 @@ def file_panel(call, fid, uid):
         Utilities.create_button(Utilities.get_text(uid, 'download'), f"dl_{fid}", uid),
         Utilities.create_button(Utilities.get_text(uid, 'delete'), f"delc_{fid}", uid)
     )
+    kb.add(Utilities.create_button(Utilities.get_text(uid, 'download_single'), f"dl_{fid}", uid))
     if f.get('type') == 'free':
         kb.add(Utilities.create_button(Utilities.get_text(uid, 'extend_time_btn'), f"extend_{fid}", uid))
     kb.add(Utilities.create_button(Utilities.get_text(uid, 'preview_code'), f"preview_{fid}", uid))
@@ -3946,15 +4056,25 @@ def monitoring_loop():
     while True:
         try:
             files = DatabaseManager.get_files()
+
+            # 1. فحص البوتات النشطة
             for fid in list(active_processes.keys()):
                 proc = active_processes.get(fid)
+
+                # إذا العملية توقفت فعلياً
                 if not proc or proc.poll() is not None:
                     if fid in active_processes:
                         del active_processes[fid]
                     continue
+
+                # إذا الملف محذوف من قاعدة البيانات - أوقف العملية
                 if fid not in files:
+                    ProcessManager.stop_script(fid, "الملف محذوف")
                     continue
+
                 uid = str(files[fid]['user_id'])
+
+                # فحص الاشتراك
                 if not Utilities.check_subscription(int(uid)):
                     ProcessManager.stop_script(fid, "عدم الاشتراك في القنوات")
                     try:
@@ -3962,7 +4082,8 @@ def monitoring_loop():
                     except:
                         pass
                     continue
-                # فحص انتهاء الوقت باستخدام expires_at
+
+                # فحص انتهاء الوقت
                 if not Utilities.is_user_pro(int(uid)) and files[fid].get('type') == 'free':
                     expires_at = files[fid].get('expires_at')
                     if expires_at:
@@ -3970,10 +4091,31 @@ def monitoring_loop():
                             exp_time = datetime.strptime(expires_at, "%Y-%m-%d %H:%M:%S")
                             if datetime.now() >= exp_time:
                                 ProcessManager.stop_script(fid, "انتهاء الوقت المحدد")
+                                # حذف تلقائي بعد انتهاء الوقت
                                 try:
-                                    bot.send_message(int(uid), Utilities.format_border(int(uid), 'time_expired', Utilities.get_text(int(uid), 'time_expired_notify', name=files[fid]['file_name'])))
+                                    encrypted_path = os.path.join(ENCRYPTED_DIR, f"{fid}.enc")
+                                    if os.path.exists(encrypted_path):
+                                        os.remove(encrypted_path)
+                                    log_path = os.path.join(LOGS_DIR, f"{fid}.log")
+                                    if os.path.exists(log_path):
+                                        os.remove(log_path)
+                                    env_dir = os.path.join(ENV_DIR, fid)
+                                    if os.path.exists(env_dir):
+                                        shutil.rmtree(env_dir, ignore_errors=True)
+                                    del files[fid]
+                                    DatabaseManager.save_files(files)
                                 except:
                                     pass
+                                try:
+                                    bot.send_message(int(uid), Utilities.format_border(int(uid), 'time_expired', Utilities.get_text(int(uid), 'time_expired_notify', name=files[fid].get('file_name', 'البوت'))))
+                                except:
+                                    pass
+                                # إشعار الأدمن
+                                for adm in DatabaseManager.get_admins():
+                                    try:
+                                        bot.send_message(adm, f"⏱️ بوت {files[fid].get('file_name', '?')} للمستخدم {uid} انتهى وقتها وتم الحذف التلقائي.")
+                                    except:
+                                        pass
                         except:
                             pass
                     # للتوافق مع القديم
@@ -3982,12 +4124,31 @@ def monitoring_loop():
                         if process_hours[fid] <= 0:
                             ProcessManager.stop_script(fid, "انتهاء الوقت المحدد")
                             try:
-                                bot.send_message(int(uid), Utilities.format_border(int(uid), 'time_expired', Utilities.get_text(int(uid), 'time_expired_notify', name=files[fid]['file_name'])))
+                                bot.send_message(int(uid), Utilities.format_border(int(uid), 'time_expired', Utilities.get_text(int(uid), 'time_expired_notify', name=files[fid].get('file_name', 'البوت'))))
                             except:
                                 pass
+
+            # 2. تنظيف العمليات اليتيمة (ملفات محذوفة لكن العمليات شغالة)
+            for proc in psutil.process_iter(['pid', 'cmdline']):
+                try:
+                    cmdline = proc.info.get('cmdline', []) or []
+                    cmd_str = ' '.join(str(c) for c in cmdline)
+                    if ENV_DIR in cmd_str and 'python' in cmd_str.lower():
+                        # التحقق إذا العملية مرتبطة بملف موجود
+                        found = False
+                        for fid in files:
+                            env_file = os.path.join(ENV_DIR, fid, f"{fid}.py")
+                            if env_file in cmd_str:
+                                found = True
+                                break
+                        if not found:
+                            proc.kill()
+                except:
+                    pass
+
         except Exception as e:
             print(f"Monitoring error: {e}")
-        time.sleep(3600)
+        time.sleep(60)  # فحص كل دقيقة بدلاً من كل ساعة
 
 def keep_alive():
     links = ["https://www.google.com", "https://www.bing.com", "https://www.wikipedia.org"]
@@ -4006,7 +4167,7 @@ init_database()
 
 print("=" * 50)
 print("🤖 بوت الاستضافة الاحترافي | White Wolf")
-print("📡 t.me/j49_c")
+print("📡 t.me/REDMOOD")
 print("📢 t.me/PRO_APK_MOOD")
 print("=" * 50)
 
