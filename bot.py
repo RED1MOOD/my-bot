@@ -2980,43 +2980,11 @@ def complete_upload(doc, user_id, h_type, hours, uid):
     fid = Utilities.gen_id()
     finfo = bot.get_file(doc.file_id)
     file_content = bot.download_file(finfo.file_path).decode('utf-8')
-
-    # ─── كشف بوتات الاستضافة ───
-# ─── كشف بوتات الاستضافة ───
+    
+# ─── كشف بوتات الاستضافة (معطل مؤقتًا) ───
 if is_hosting_bot(file_content) and not Utilities.is_admin(user_id):
-    warning_text = """🚨 تم إيقاف تشغيل الملف مؤقتًا
-اكتشف نظام الحماية لدينا مؤشرات قد تدل على أن الملف يحتوي على وظائف قد تؤثر على أمن المنصة أو تحاول الوصول إلى ملفات النظام.
-
-📋 تم إيقاف تشغيل الملف وإرساله للمراجعة الأمنية.
-
-إذا كان الملف سليمًا، فسيتم اعتماده بعد المراجعة.
-
-إذا كنت تعتقد أن هذا الإجراء تم بالخطأ، يمكنك التواصل مع المطور.
-
-🛡️ Security System | Automated Detection"""
-
-    Utilities.send_message(
-        user_id,
-        uid,
-        warning_text,
-        build_back_keyboard(uid, "nav_upload")
-    )
-
-    for adm in DatabaseManager.get_admins():
-        try:
-            bot.send_message(
-                adm,
-                f"""🚨 ملف يحتاج مراجعة
-
-👤 المستخدم: {user_id}
-📄 الملف: {doc.file_name}
-
-تم إيقاف الملف تلقائيًا بواسطة نظام الحماية.
-يرجى مراجعته واتخاذ الإجراء المناسب."""
-            )
-        except:
-            pass
-
+    # سيتم إضافة نظام الحماية لاحقًا
+    pass
     return
 
     # ─── التثبيت الذكي للمكتبات ───
