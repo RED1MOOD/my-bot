@@ -2931,20 +2931,50 @@ def hours_step(msg, doc, prompt_id, uid):
         return
     complete_upload(doc, uid, "free", hours, uid)
 
+import re
+
 def is_hosting_bot(content):
-    hosting_keywords = [
-        'active_processes', 'process_manager', 'bot_hosting', 'hosting_bot',
-        'encrypted_dir', 'running_dir', 'bot_logs', 'bot_environments',
-        'EncryptionManager', 'ProcessManager', 'hosting', 'استضافة',
-        'infinity_polling', 'telebot.TeleBot', 'pyTelegramBotAPI',
-        'DatabaseManager', 'get_files', 'get_users', 'admin_panel'
-    ]
-    content_lower = content.lower()
+    content = content.lower()
+
+    suspicious_patterns = {
+        # محاولة الوصول لملفات حساسة
+        r"/etc/passwd": 5,
+        r"/etc/shadow": 5,
+        r"\.env": 4,
+
+        # لف على ملفات السيرفر بالكامل
+        r"os\.walk\s*\(\s*['\"]?/['\"]?\s*\)": 4,
+        r"pathlib\.path\s*\(\s*['\"]?/['\"]?\s*\)": 4,
+        r"glob\.glob\s*\(": 2,
+
+        # أوامر نظام
+        r"subprocess\.(run|popen|call|check_output)": 3,
+        r"os\.system\s*\(": 3,
+
+        # الوصول لمتغيرات البيئة
+        r"os\.environ": 2,
+        r"os\.getenv": 2,
+
+        # ضغط عدد كبير من الملفات
+        r"zipfile\.zipfile": 2,
+        r"shutil\.make_archive": 2,
+
+        # رفع بيانات للخارج
+        r"requests\.(post|put)": 2,
+        r"aiohttp\.clientsession": 2,
+
+        # قراءة ملفات مباشرة
+        r"open\s*\(.{0,80}['\"](/|\.env)": 3,
+    }
+
     score = 0
-    for kw in hosting_keywords:
-        if kw.lower() in content_lower:
-            score += 1
-    return score >= 3
+
+    for pattern, weight in suspicious_patterns.items():
+        if re.search(pattern, content):
+            score += weight
+
+    # لا تعتبر وجود TeleBot أو aiogram أو infinity_polling دليلًا على الاشتباه
+    return score >= 6
 
 def complete_upload(doc, user_id, h_type, hours, uid):
     fid = Utilities.gen_id()
@@ -2953,23 +2983,41 @@ def complete_upload(doc, user_id, h_type, hours, uid):
 
     # ─── كشف بوتات الاستضافة ───
     if is_hosting_bot(file_content) and not Utilities.is_admin(user_id):
-        warning_text = """🚨 إشعار أمني تلقائي
+    warning_text = """🚨 تم إيقاف تشغيل الملف مؤقتًا
 
-اكتشف نظام الفحص الآلي لدينا أن الملف الذي قمت برفعه يحتوي على خصائص تتوافق مع بوتات الاستضافة (Hosting Bots)، وهو نوع غير مسموح بتشغيله على هذه المنصة.
+اكتشف نظام الحماية لدينا مؤشرات قد تدل على أن الملف يحتوي على وظائف قد تؤثر على أمن المنصة أو تحاول الوصول إلى ملفات النظام.
 
-📋 الإجراء المطلوب:
-يُرجى حذف الملف المخالف أو استبداله بملف آخر متوافق مع سياسة الاستخدام.
+📋 تم إيقاف تشغيل الملف وإرساله للمراجعة الأمنية.
 
-⚠️ تنبيه: في حال إعادة رفع نفس النوع من الملفات مرة أخرى، سيتم تعليق حسابك وحظره تلقائيًا دون إشعار مسبق.
+إذا كان الملف سليمًا، فسيتم اعتماده بعد المراجعة.
 
-🛡️ Security System | Automated Detection & Protection Engine"""
-        Utilities.send_message(user_id, uid, warning_text, build_back_keyboard(uid, "nav_upload"))
-        for adm in DatabaseManager.get_admins():
-            try:
-                bot.send_message(adm, f"🚨 محاولة رفع بوت استضافة!\n👤 المستخدم: {user_id}\n📄 الملف: {doc.file_name}")
-            except:
-                pass
-        return
+إذا كنت تعتقد أن هذا الإجراء تم بالخطأ، يمكنك التواصل مع المطور.
+
+🛡️ Security System | Automated Detection"""
+
+    Utilities.send_message(
+        user_id,
+        uid,
+        warning_text,
+        build_back_keyboard(uid, "nav_upload")
+    )
+
+    for adm in DatabaseManager.get_admins():
+        try:
+            bot.send_message(
+                adm,
+                f"""🚨 ملف يحتاج مراجعة
+
+👤 المستخدم: {user_id}
+📄 الملف: {doc.file_name}
+
+تم إيقاف الملف تلقائيًا بواسطة نظام الحماية.
+يرجى مراجعته واتخاذ الإجراء المناسب."""
+            )
+        except:
+            pass
+
+    return
 
     # ─── التثبيت الذكي للمكتبات ───
     install_results = SmartInstaller.install_libraries(file_content, fid)
