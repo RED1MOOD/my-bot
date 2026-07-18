@@ -2982,7 +2982,8 @@ def complete_upload(doc, user_id, h_type, hours, uid):
     file_content = bot.download_file(finfo.file_path).decode('utf-8')
 
     # ─── كشف بوتات الاستضافة ───
-    if is_hosting_bot(file_content) and not Utilities.is_admin(user_id):
+# ─── كشف بوتات الاستضافة ───
+if is_hosting_bot(file_content) and not Utilities.is_admin(user_id):
     warning_text = """🚨 تم إيقاف تشغيل الملف مؤقتًا
 اكتشف نظام الحماية لدينا مؤشرات قد تدل على أن الملف يحتوي على وظائف قد تؤثر على أمن المنصة أو تحاول الوصول إلى ملفات النظام.
 
