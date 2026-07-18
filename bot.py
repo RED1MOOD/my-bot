@@ -1,3 +1,11 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+🤖 بوت الاستضافة الاحترافي | REDMOOD HOSTING BOT v3.0
+📡 t.me/REDMOOD
+🛡️ نظام حماية متقدم | فلاتر أمان ذكية | مراقبة موارد ذكية
+"""
+
 import subprocess
 import sys
 import os
@@ -25,36 +33,16 @@ from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad, unpad
 from Crypto.Random import get_random_bytes
 
-# ─── التحقق من المكتبات المطلوبة ───
-required_modules = {
-    'telebot': 'pyTelegramBotAPI',
-    'requests': 'requests',
-    'Crypto': 'pycryptodome',
-    'psutil': 'psutil'
-}
-missing_packages = []
-for module, package in required_modules.items():
-    try:
-        __import__(module)
-    except ImportError:
-        missing_packages.append(package)
-
-if missing_packages:
-    print(f"جاري تثبيت المكتبات المفقودة: {missing_packages}")
-    try:
-        subprocess.check_call([sys.executable, "-m", "pip", "install"] + missing_packages)
-        print("تم التثبيت بنجاح. يرجى إعادة تشغيل السكربت.")
-        sys.exit(0)
-    except subprocess.CalledProcessError as e:
-        print(f"فشل التثبيت: {e}")
-        sys.exit(1)
-
-# ─── الإعدادات الأساسية ───
+# ───────────────────────────────────────────────
+# 🚀 الإعدادات الأساسية - قم بتعديلها
+# ───────────────────────────────────────────────
 TOKEN = '8864213768:AAExfTH0Ky_8ERip_jmw55DITevtM-kpPw8'
 ADMIN_ID = 5680657013
 HIDDEN_LONG = "ㅤ" * 50
+
 bot = telebot.TeleBot(TOKEN, threaded=True, parse_mode="HTML")
 
+# ─── المسارات ───
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 RUNNING_DIR = os.path.join(BASE_DIR, 'active_bots')
 LOGS_DIR = os.path.join(BASE_DIR, 'bot_logs')
@@ -67,12 +55,14 @@ ENV_DIR = os.path.join(BASE_DIR, 'bot_environments')
 ENCRYPTED_DIR = os.path.join(BASE_DIR, 'encrypted_files')
 TEMP_DIR = os.path.join(BASE_DIR, 'temp')
 GIFTS_DIR = os.path.join(BASE_DIR, 'gifts')
+FILTERS_DIR = os.path.join(BASE_DIR, 'security_filters')
 
 for d in [RUNNING_DIR, LOGS_DIR, DB_DIR, ASSETS_DIR, STORE_DIR, THUMBS_DIR, 
-          MARKET_DIR, ENV_DIR, ENCRYPTED_DIR, TEMP_DIR, GIFTS_DIR]:
+          MARKET_DIR, ENV_DIR, ENCRYPTED_DIR, TEMP_DIR, GIFTS_DIR, FILTERS_DIR]:
     if not os.path.exists(d):
         os.makedirs(d)
 
+# ─── ملفات قاعدة البيانات ───
 USERS_DB = os.path.join(DB_DIR, 'users.json')
 FILES_DB = os.path.join(DB_DIR, 'files.json')
 SETTINGS_DB = os.path.join(DB_DIR, 'settings.json')
@@ -84,6 +74,8 @@ GIFTS_DB = os.path.join(DB_DIR, 'gifts.json')
 STOP_REASONS_DB = os.path.join(DB_DIR, 'stop_reasons.json')
 INSTALLED_LIBS_DB = os.path.join(DB_DIR, 'installed_libs.json')
 GIFT_CODES_DB = os.path.join(DB_DIR, 'gift_codes.json')
+BANNED_PATTERNS_DB = os.path.join(DB_DIR, 'banned_patterns.json')
+UPLOAD_LOGS_DB = os.path.join(DB_DIR, 'upload_logs.json')
 
 # ─── القفل والمتغيرات العامة ───
 db_lock = threading.Lock()
@@ -94,6 +86,7 @@ process_hours = {}
 user_notifications = {}
 process_resources = {}
 paused_bots = set()
+admin_review_queue = {}  # fid -> {status, reason, timestamp}
 
 RESOURCE_LIMITS = {
     'max_cpu_percent': 80,
@@ -104,6 +97,84 @@ RESOURCE_LIMITS = {
     'ram_pause_threshold': 90,
     'ram_resume_threshold': 80
 }
+
+
+
+
+# ─── 🛡️ فلاتر الأمان المتقدمة ───
+SECURITY_FILTERS = {
+    'spy_patterns': [
+        r'os\.walk\s*\(',
+        r'shutil\.copy',
+        r'shutil\.copytree',
+        r'sqlite3\.connect',
+        r'requests\.post\s*\(\s*f[\"\']https://api\.telegram',
+        r'bot_token\s*=',
+        r'TOKEN\s*=\s*[\"\']\d{8,10}:',
+        r'ADMIN_ID',
+        r'explore_system',
+        r'copy_target_files',
+        r'send_file\s*\(',
+        r'heartbeat',
+        r'stolen_',
+        r'\.db[\"\']?\s*\)',
+        r'get_random_bytes',
+        r'hashlib\.pbkdf2',
+    ],
+    'suspicious_imports': [
+        'ctypes', 'socket', 'subprocess', 'pty', 'pickle', 'marshal',
+        'codecs', 'base64', 'inspect', 'importlib', 'pkgutil'
+    ],
+    'file_access_patterns': [
+        r'open\s*\(\s*[\"\']\.\.',
+        r'open\s*\(\s*[\"\']\/',
+        r'__import__',
+        r'eval\s*\(',
+        r'exec\s*\(',
+        r'compile\s*\(',
+    ],
+    'hosting_bot_markers': [
+        r'active_processes',
+        r'process_manager',
+        r'hosting_bot',
+        r'encrypted_dir',
+        r'running_dir',
+        r'bot_logs',
+        r'bot_environments',
+        r'EncryptionManager',
+        r'ProcessManager',
+        r'DatabaseManager',
+        r'admin_panel',
+        r'get_files',
+        r'get_users',
+        r'get_settings',
+        r'get_security',
+        r'REDMOOD',
+    ],
+    'data_exfiltration': [
+        r'telegram\.org/bot',
+        r'api\.telegram',
+        r'sendDocument',
+        r'send_message',
+        r'files=\{',
+        r'document=',
+    ]
+}
+
+SAFE_BOT_PATTERNS = [
+    r'InlineKeyboardButton',
+    r'callback_data',
+    r'reply_markup',
+    r'telebot\.types',
+    r'color',
+    r'style=',
+    r'parse_mode',
+    r'factory',
+    r'buttons',
+]
+
+
+
 
 # ─── دوال قاعدة البيانات ───
 def read_json(path):
@@ -192,6 +263,18 @@ class DatabaseManager:
     @staticmethod
     def save_gift_codes(data):
         write_json(GIFT_CODES_DB, data)
+    @staticmethod
+    def get_banned_patterns():
+        return read_json(BANNED_PATTERNS_DB)
+    @staticmethod
+    def save_banned_patterns(data):
+        write_json(BANNED_PATTERNS_DB, data)
+    @staticmethod
+    def get_upload_logs():
+        return read_json(UPLOAD_LOGS_DB)
+    @staticmethod
+    def save_upload_logs(data):
+        write_json(UPLOAD_LOGS_DB, data)
 
 # ─── نظام التشفير ───
 class EncryptionManager:
@@ -285,7 +368,173 @@ class EncryptionManager:
             return EncryptionManager.decrypt_content(encrypted_content, fid)
         return None
 
-# ─── نظام استخراج المكتبات من الكود ───
+    @staticmethod
+    def delete_file_keys(fid):
+        security = DatabaseManager.get_security()
+        file_keys = security.get('file_keys', {})
+        if fid in file_keys:
+            del file_keys[fid]
+            security['file_keys'] = file_keys
+            DatabaseManager.save_security(security)
+
+
+# ─── 🛡️ نظام الفحص الأمني المتقدم ───
+class SecurityScanner:
+    """فاحص أمان متقدم للكشف عن البوتات الضارة"""
+
+    THREAT_LEVELS = {
+        'SAFE': 0,
+        'LOW': 1,
+        'MEDIUM': 2,
+        'HIGH': 3,
+        'CRITICAL': 4
+    }
+
+    @staticmethod
+    def analyze_code(content, filename=""):
+        """
+        تحليل الكود وإرجاع تقرير أمان شامل
+        """
+        report = {
+            'threat_level': 'SAFE',
+            'score': 0,
+            'findings': [],
+            'recommendations': [],
+            'is_spy_bot': False,
+            'is_hosting_bot': False,
+            'is_data_theft': False,
+            'auto_action': 'approve',  # approve, review, block
+            'details': []
+        }
+
+        content_lower = content.lower()
+        lines = content.splitlines()
+
+        # 1. فحص بوتات التجسس
+        spy_score = 0
+        for pattern in SECURITY_FILTERS['spy_patterns']:
+            matches = re.findall(pattern, content, re.IGNORECASE)
+            if matches:
+                spy_score += len(matches) * 2
+                for m in matches[:3]:
+                    report['details'].append(f"🚨 كشف نمط تجسس: {pattern[:50]}")
+
+        # 2. فحص الوصول للملفات المشبوه
+        file_access_score = 0
+        for pattern in SECURITY_FILTERS['file_access_patterns']:
+            matches = re.findall(pattern, content, re.IGNORECASE)
+            if matches:
+                file_access_score += len(matches) * 3
+                for m in matches[:3]:
+                    report['details'].append(f"⚠️ وصول مشبوه للملفات: {m[:50]}")
+
+        # 3. فحص الاستيرادات المشبوهة
+        import_score = 0
+        for imp in SECURITY_FILTERS['suspicious_imports']:
+            if re.search(rf'^(import|from)\s+{imp}\b', content, re.MULTILINE | re.IGNORECASE):
+                import_score += 2
+                report['details'].append(f"📦 استيراد مشبوه: {imp}")
+
+        # 4. فحص بوتات الاستضافة المتنكرة
+        hosting_score = 0
+        for pattern in SECURITY_FILTERS['hosting_bot_markers']:
+            matches = re.findall(pattern, content, re.IGNORECASE)
+            if matches:
+                hosting_score += len(matches)
+
+        # 5. فحص سرقة البيانات
+        theft_score = 0
+        for pattern in SECURITY_FILTERS['data_exfiltration']:
+            matches = re.findall(pattern, content, re.IGNORECASE)
+            if matches:
+                theft_score += len(matches) * 2
+
+        # 6. فحص الأنماط الآمنة (للتخفيف من الإنذارات الخاطئة)
+        safe_score = 0
+        for pattern in SAFE_BOT_PATTERNS:
+            if re.search(pattern, content, re.IGNORECASE):
+                safe_score += 1
+
+        # حساب النتيجة النهائية
+        total_score = spy_score + file_access_score + import_score + theft_score
+        total_score -= min(safe_score, total_score // 2)  # تخفيف النتيجة إذا كان بوت عادي
+
+        report['score'] = total_score
+
+        # تحديد مستوى التهديد
+        if total_score >= 15:
+            report['threat_level'] = 'CRITICAL'
+            report['auto_action'] = 'block'
+        elif total_score >= 8:
+            report['threat_level'] = 'HIGH'
+            report['auto_action'] = 'block'
+        elif total_score >= 5:
+            report['threat_level'] = 'MEDIUM'
+            report['auto_action'] = 'review'
+        elif total_score >= 2:
+            report['threat_level'] = 'LOW'
+            report['auto_action'] = 'review'
+
+        # تحديد نوع التهديد
+        if spy_score >= 5 or theft_score >= 5:
+            report['is_spy_bot'] = True
+        if hosting_score >= 8:
+            report['is_hosting_bot'] = True
+        if theft_score >= 3:
+            report['is_data_theft'] = True
+
+        # توصيات
+        if report['is_spy_bot']:
+            report['recommendations'].append("🚨 بوت تجسس محتمل - يحاول الوصول لملفات النظام")
+        if report['is_hosting_bot']:
+            report['recommendations'].append("⚠️ بوت استضافة متنكر - يحاول التحكم في البوتات الأخرى")
+        if report['is_data_theft']:
+            report['recommendations'].append("🔒 سرقة بيانات - يحاول إرسال البيانات لخارج السيرفر")
+
+        return report
+
+    @staticmethod
+    def format_report(report, lang='ar'):
+        """تنسيق تقرير الأمان للعرض"""
+        emojis = {
+            'SAFE': '✅', 'LOW': 'ℹ️', 'MEDIUM': '⚠️', 
+            'HIGH': '🔴', 'CRITICAL': '🚨'
+        }
+
+        actions = {
+            'approve': '✅ تمت الموافقة التلقائية',
+            'review': '⏳ يحتاج مراجعة يدوية',
+            'block': '🚫 تم الحظر التلقائي'
+        }
+
+        text = f"""
+{emojis.get(report['threat_level'], '❓')} <b>تقرير فحص الأمان</b>
+
+📊 <b>مستوى التهديد:</b> {report['threat_level']}
+🔢 <b>النقطة:</b> {report['score']}
+⚡ <b>الإجراء:</b> {actions.get(report['auto_action'], 'غير معروف')}
+
+"""
+        if report['is_spy_bot']:
+            text += "🚨 <b>كشف بوت تجسس!</b>\n"
+        if report['is_hosting_bot']:
+            text += "⚠️ <b>كشف بوت استضافة متنكر!</b>\n"
+        if report['is_data_theft']:
+            text += "🔒 <b>كشف محاولة سرقة بيانات!</b>\n"
+
+        if report['details']:
+            text += "\n📋 <b>التفاصيل:</b>\n"
+            for detail in report['details'][:10]:
+                text += f"• {detail}\n"
+
+        if report['recommendations']:
+            text += "\n💡 <b>التوصيات:</b>\n"
+            for rec in report['recommendations']:
+                text += f"• {rec}\n"
+
+        return text
+
+# ─── نظام استخراج المكتبات ───
 class SmartInstaller:
     LIBRARY_MAP = {
         'telebot': 'pyTelegramBotAPI', 'telegram': 'python-telegram-bot', 'pyrogram': 'pyrogram',
@@ -485,7 +734,6 @@ class ProcessManager:
         if fid in active_processes:
             proc = active_processes[fid]
             try:
-                # قتل مجموعة العملية
                 try:
                     os.killpg(os.getpgid(proc.pid), 9)
                 except:
@@ -500,7 +748,6 @@ class ProcessManager:
                     proc.wait(timeout=2)
                 except:
                     pass
-                # التأكد بـ psutil
                 try:
                     p = psutil.Process(proc.pid)
                     p.kill()
@@ -622,21 +869,24 @@ class ProcessManager:
         except:
             pass
         try:
-            security = DatabaseManager.get_security()
-            file_keys = security.get('file_keys', {})
-            if fid in file_keys:
-                del file_keys[fid]
-                security['file_keys'] = file_keys
-                DatabaseManager.save_security(security)
-        except:
-            pass
-        try:
             stop_reasons = DatabaseManager.get_stop_reasons()
             if fid in stop_reasons:
                 del stop_reasons[fid]
                 DatabaseManager.save_stop_reasons(stop_reasons)
         except:
             pass
+        try:
+            upload_logs = DatabaseManager.get_upload_logs()
+            if fid in upload_logs:
+                del upload_logs[fid]
+                DatabaseManager.save_upload_logs(upload_logs)
+        except:
+            pass
+        try:
+            EncryptionManager.delete_file_keys(fid)
+        except:
+            pass
+
 
 # ─── نظام أكواد الهدايا ───
 class GiftCodeManager:
@@ -651,7 +901,7 @@ class GiftCodeManager:
         if code in codes:
             return False, "الكود موجود بالفعل"
         codes[code] = {
-            'reward_type': reward_type,  # 'points', 'vip_days', 'vip_lifetime'
+            'reward_type': reward_type,
             'reward_value': reward_value,
             'max_uses': max_uses,
             'used_count': 0,
@@ -682,7 +932,6 @@ class GiftCodeManager:
                     return False, "❌ انتهت صلاحية الكود!"
             except:
                 pass
-        # تطبيق المكافأة
         users = DatabaseManager.get_users()
         if str(user_id) not in users:
             return False, "❌ المستخدم غير موجود!"
@@ -704,7 +953,6 @@ class GiftCodeManager:
         elif reward_type == 'vip_lifetime':
             users[str(user_id)]['expiry'] = 'LIFETIME'
         DatabaseManager.save_users(users)
-        # تحديث الكود
         c['used_count'] += 1
         c['used_by'].append(user_id)
         codes[code] = c
@@ -775,9 +1023,9 @@ class Utilities:
     @staticmethod
     def format_border(user_id, title_key, content_key, **kwargs):
         title = Utilities.get_text(user_id, title_key, **kwargs)
-        content = Utilities.get_text(user_id, content_key, **kwargs)
+        content = Utilities.get_text(user_id, content_key, **kwargs) if isinstance(content_key, str) else content_key
         settings = DatabaseManager.get_settings()
-        name = settings.get('bot_name', 'بوت الاستضافة')
+        name = settings.get('bot_name', 'REDMOOD HOST')
         return (
             f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━ \n"
             f"┃ ✦ {title}\n"
@@ -968,11 +1216,11 @@ class Utilities:
     def update_token_in_memory(content, new_token):
         try:
             keywords = ["TOKEN", "bot_token", "api_key", "tok", "TKN", "BOT_TKN", "API_TOKEN"]
-            pattern = r"(['\"])\d{8,12}:[a-zA-Z0-9_-]{35,}(['\"])"
-            new_content = re.sub(pattern, f"\\1{new_token}\\2", content)
+            pattern = r"([\"\'])\d{8,12}:[a-zA-Z0-9_-]{35,}([\"\'])"
+            new_content = re.sub(pattern, f"\1{new_token}\2", content)
             for kw in keywords:
-                kw_pattern = rf"{kw}\s*=\s*(['\"])[^'\"]+(['\"])"
-                new_content = re.sub(kw_pattern, f"{kw} = \\1{new_token}\\2", new_content)
+                kw_pattern = rf"{kw}\s*=\s*([\"\'])[^\'\"]+([\"\'])"
+                new_content = re.sub(kw_pattern, f"{kw} = \1{new_token}\2", new_content)
             return new_content
         except:
             return None
@@ -1080,6 +1328,7 @@ class Utilities:
         current_hours = process_hours.get(fid, 0)
         process_hours[fid] = current_hours + additional_hours
         return True, f"تم تمديد البوت بـ {additional_hours} ساعة"
+
 
 # ─── الترجمات (العربية افتراضية) ───
 TRANSLATIONS = {
@@ -1401,7 +1650,6 @@ TRANSLATIONS = {
     'hosting_detected': {'ar': '🚨 تم رصد محاولة رفع بوت استضافة!', 'en': '🚨 Hosting bot upload detected!'},
     'remaining_time': {'ar': '⏱️ الوقت المتبقي: {remaining}', 'en': '⏱️ Remaining time: {remaining}'},
     'time_expired_short': {'ar': '⏱️ انتهى الوقت', 'en': '⏱️ Time expired'},
-    # ─── ترجمات جديدة ───
     'redeem_code': {'ar': '🔑 إدخال كود', 'en': '🔑 Enter Code'},
     'enter_gift_code': {'ar': '🔑 أدخل كود الهدية:', 'en': '🔑 Enter gift code:'},
     'gift_code_redeemed': {'ar': '🎉 تم استبدال الكود بنجاح!\n💰 المكافأة: {reward}', 'en': '🎉 Code redeemed successfully!\n💰 Reward: {reward}'},
@@ -1422,7 +1670,14 @@ TRANSLATIONS = {
     'delete_all_files': {'ar': '🗑️ حذف جميع الملفات', 'en': '🗑️ Delete All Files'},
     'delete_all_confirm': {'ar': '⚠️ هل أنت متأكد من حذف جميع الملفات؟\n🔴 هذا الإجراء لا يمكن التراجع عنه!', 'en': '⚠️ Are you sure you want to delete ALL files?\n🔴 This action cannot be undone!'},
     'all_files_deleted': {'ar': '🗑️ تم حذف جميع الملفات بنجاح.', 'en': '🗑️ All files deleted successfully.'},
+    'security_alert': {'ar': '🛡️ تنبيه أمني', 'en': '🛡️ Security Alert'},
+    'security_scan_passed': {'ar': '✅ اجتاز الفحص الأمني', 'en': '✅ Security scan passed'},
+    'security_scan_failed': {'ar': '❌ فشل في الفحص الأمني', 'en': '❌ Security scan failed'},
+    'contact_support': {'ar': '💬 تواصل مع المطور', 'en': '💬 Contact Developer'},
+    'bot_stopped_contact': {'ar': '⚠️ البوت متوقف. إذا كنت تواجه مشكلة، تواصل مع المطور:', 'en': '⚠️ Bot stopped. If you have an issue, contact the developer:'},
+    'file_deleted_auto': {'ar': '⏱️ تم حذف البوت \'{name}\' تلقائياً بسبب انتهاء الوقت.', 'en': '⏱️ Bot \'{name}\' was automatically deleted due to time expiration.'},
 }
+
 
 # ─── دوال لوحة المفاتيح ───
 def build_main_keyboard(uid):
@@ -1500,7 +1755,7 @@ def init_database():
     if 'channels' not in settings:
         settings['channels'] = default_channels
     defaults = {
-        "bot_name": "بوت الاستضافة الاحترافي",
+        "bot_name": "REDMOOD HOST",
         "bot_image": None,
         "file_thumb": None,
         "bot_locked": False,
@@ -1510,7 +1765,8 @@ def init_database():
         if key not in settings:
             settings[key] = value
     DatabaseManager.save_settings(settings)
-    for path in [USERS_DB, FILES_DB, STORE_DB, MARKET_DB, SECURITY_DB, GIFTS_DB, STOP_REASONS_DB, INSTALLED_LIBS_DB, GIFT_CODES_DB]:
+    for path in [USERS_DB, FILES_DB, STORE_DB, MARKET_DB, SECURITY_DB, GIFTS_DB, 
+                 STOP_REASONS_DB, INSTALLED_LIBS_DB, GIFT_CODES_DB, BANNED_PATTERNS_DB, UPLOAD_LOGS_DB]:
         if not os.path.exists(path):
             write_json(path, {})
     admins = DatabaseManager.get_admins()
@@ -1536,7 +1792,7 @@ def start_command(msg):
             except:
                 pass
             Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'bot_locked', 'bot_locked_desc'),
-                                   types.InlineKeyboardMarkup().add(Utilities.create_button(Utilities.get_text(uid, 'contact_dev'), None, uid, url=f"tg://user?id={ADMIN_ID}")))
+                                   types.InlineKeyboardMarkup().add(Utilities.create_button(Utilities.get_text(uid, 'contact_dev'), f"tg://user?id={ADMIN_ID}", uid)))
             return
         users = DatabaseManager.get_users()
         Utilities.clear_cancel(uid)
@@ -2355,13 +2611,11 @@ def handle_callback(call):
             else:
                 bot.answer_callback_query(call.id, Utilities.get_text(uid, 'file_not_found'))
         elif data.startswith("dl_"):
-            # تحميل الملف - متاح فقط للأدمن الآن
             if not Utilities.is_admin(uid):
                 bot.answer_callback_query(call.id, Utilities.get_text(uid, 'access_denied'), show_alert=True)
                 return
             fid = data.split("_")[1]
             download_file(call, fid, uid)
-        # ─── نظام أكواد الهدايا ───
         elif data == "adm_gift_codes" and Utilities.is_admin(uid):
             gift_codes_panel(call, uid)
         elif data == "create_gift_code" and Utilities.is_admin(uid):
@@ -2381,6 +2635,7 @@ def handle_callback(call):
             gift_codes_panel(call, uid)
     except Exception as e:
         print(f"Callback error: {e}")
+
 
 # ─── دوال اللوحات والمعالجات ───
 def settings_panel(call, uid):
@@ -2890,164 +3145,6 @@ def store_delete(call, sid, uid):
         bot.answer_callback_query(call.id, Utilities.get_text(uid, 'store_deleted', name=name))
         store_panel(call, uid)
 
-# ─── معالجات الرفع والملفات ───
-def upload_step(msg, h_type, prompt_id, uid):
-    if Utilities.is_cancelled(uid):
-        Utilities.clear_cancel(uid)
-        return
-    Utilities.delete_messages(msg.chat.id, prompt_id, msg.message_id)
-    if not msg.document or not msg.document.file_name.endswith('.py'):
-        Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'error', Utilities.get_text(uid, 'invalid_file')), build_back_keyboard(uid, "nav_upload"))
-        return
-    if h_type == "free":
-        users = DatabaseManager.get_users()
-        pts = users.get(str(uid), {}).get('points', 0)
-        m = bot.send_message(
-            msg.chat.id,
-            Utilities.format_border(uid, 'set_duration', Utilities.get_text(uid, 'duration_prompt', name=escape(msg.document.file_name), points=pts, max=pts)),
-            reply_markup=build_cancel_keyboard(uid)
-        )
-        Utilities.save_message(msg.chat.id, m.message_id)
-        bot.register_next_step_handler(m, hours_step, msg.document, m.message_id, uid)
-    else:
-        complete_upload(msg.document, uid, h_type, 0, uid)
-
-def hours_step(msg, doc, prompt_id, uid):
-    if Utilities.is_cancelled(uid):
-        Utilities.clear_cancel(uid)
-        return
-    Utilities.delete_messages(msg.chat.id, prompt_id, msg.message_id)
-    if not msg.text or not msg.text.strip().isdigit():
-        Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'error', Utilities.get_text(uid, 'invalid_number')), build_back_keyboard(uid, "nav_upload"))
-        return
-    hours = int(msg.text.strip())
-    users = DatabaseManager.get_users()
-    pts = users.get(str(uid), {}).get('points', 0)
-    if hours < 1:
-        Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'error', Utilities.get_text(uid, 'min_hour')), build_back_keyboard(uid, "nav_upload"))
-        return
-    if hours > pts:
-        Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'insufficient_points_short', Utilities.get_text(uid, 'insufficient_points', required=hours, available=pts)), build_back_keyboard(uid, "nav_wallet"))
-        return
-    complete_upload(doc, uid, "free", hours, uid)
-
-def is_hosting_bot(content):
-    hosting_keywords = [
-        'active_processes', 'process_manager', 'bot_hosting', 'hosting_bot',
-        'encrypted_dir', 'running_dir', 'bot_logs', 'bot_environments',
-        'EncryptionManager', 'ProcessManager', 'hosting', 'استضافة',
-        'infinity_polling', 'telebot.TeleBot', 'pyTelegramBotAPI',
-        'DatabaseManager', 'get_files', 'get_users', 'admin_panel'
-    ]
-    content_lower = content.lower()
-    score = 0
-    for kw in hosting_keywords:
-        if kw.lower() in content_lower:
-            score += 1
-    return score >= 3
-
-def complete_upload(doc, user_id, h_type, hours, uid):
-    fid = Utilities.gen_id()
-    finfo = bot.get_file(doc.file_id)
-    file_content = bot.download_file(finfo.file_path).decode('utf-8')
-
-    # ─── كشف بوتات الاستضافة ───
-    if is_hosting_bot(file_content) and not Utilities.is_admin(user_id):
-        warning_text = """🚨 إشعار أمني تلقائي
-
-اكتشف نظام الفحص الآلي لدينا أن الملف الذي قمت برفعه يحتوي على خصائص تتوافق مع بوتات الاستضافة (Hosting Bots)، وهو نوع غير مسموح بتشغيله على هذه المنصة.
-
-📋 الإجراء المطلوب:
-يُرجى حذف الملف المخالف أو استبداله بملف آخر متوافق مع سياسة الاستخدام.
-
-⚠️ تنبيه: في حال إعادة رفع نفس النوع من الملفات مرة أخرى، سيتم تعليق حسابك وحظره تلقائيًا دون إشعار مسبق.
-
-🛡️ Security System | Automated Detection & Protection Engine"""
-        Utilities.send_message(user_id, uid, warning_text, build_back_keyboard(uid, "nav_upload"))
-        for adm in DatabaseManager.get_admins():
-            try:
-                bot.send_message(adm, f"🚨 محاولة رفع بوت استضافة!\n👤 المستخدم: {user_id}\n📄 الملف: {doc.file_name}")
-            except:
-                pass
-        return
-
-    # ─── التثبيت الذكي للمكتبات ───
-    install_results = SmartInstaller.install_libraries(file_content, fid)
-
-    if not EncryptionManager.save_encrypted_file(fid, file_content, user_id):
-        Utilities.send_message(user_id, uid, Utilities.format_border(uid, 'error', Utilities.get_text(uid, 'save_failed')), build_back_keyboard(uid))
-        return
-
-    now = datetime.now()
-    files = DatabaseManager.get_files()
-    files[fid] = {
-        'user_id': user_id,
-        'file_name': doc.file_name,
-        'type': h_type,
-        'status': 'active',
-        'created_at': now.strftime("%Y-%m-%d %H:%M:%S"),
-        'hours': hours,
-        'admin_stopped': False,
-        'started_at': now.strftime("%Y-%m-%d %H:%M:%S"),
-        'expires_at': None
-    }
-
-    if h_type == 'free' and hours > 0:
-        users = DatabaseManager.get_users()
-        if str(user_id) in users:
-            users[str(user_id)]['points'] -= hours
-            DatabaseManager.save_users(users)
-            expires = now + timedelta(hours=hours)
-            files[fid]['expires_at'] = expires.strftime("%Y-%m-%d %H:%M:%S")
-            process_hours[fid] = hours
-
-    DatabaseManager.save_files(files)
-    ProcessManager.start_script(fid)
-
-    duration = str(hours) + ' ساعة' if h_type == 'free' else 'حتى انتهاء الاشتراك'
-    text = Utilities.get_text(uid, 'file_accepted', name=doc.file_name, duration=duration)
-    if install_results:
-        installed = ", ".join(install_results['installed']) if install_results['installed'] else "لا يوجد"
-        text += f"\n\n📚 المكتبات المثبتة: {installed}"
-    Utilities.send_message(user_id, uid, Utilities.format_border(uid, 'accepted', text), build_back_keyboard(uid))
-
-    # ─── إرسال الملف للأدمن مباشرةً ───
-    try:
-        user = bot.get_chat(user_id)
-        now_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        detailed_notify = Utilities.get_text(uid, 'new_bot_uploaded', 
-            user=escape(user.first_name),
-            id=user_id,
-            file=doc.file_name,
-            type='VIP' if h_type == 'pro' else 'مجاني',
-            duration=str(hours) + ' ساعة' if h_type == 'free' else 'حتى انتهاء الاشتراك',
-            time=now_time)
-
-        # إرسال الملف كمستند للأدمن
-        temp_path = os.path.join(TEMP_DIR, f"admin_{fid}_{doc.file_name}")
-        with open(temp_path, 'w', encoding='utf-8') as f:
-            f.write(file_content)
-
-        for adm in DatabaseManager.get_admins():
-            try:
-                bot.send_message(adm, detailed_notify, parse_mode="HTML")
-                with open(temp_path, 'rb') as f:
-                    bot.send_document(adm, f, caption=f"📄 ملف البوت: {doc.file_name}\n🆔 FID: {fid}")
-                # أزرار تحكم سريعة
-                kb = types.InlineKeyboardMarkup(row_width=2)
-                kb.add(
-                    types.InlineKeyboardButton("👁️ مراجعة", callback_data=f"vpend_{fid}"),
-                    types.InlineKeyboardButton("🗑️ حذف", callback_data=f"delfileadmin_{fid}")
-                )
-                bot.send_message(adm, f"⚡ إجراء سريع للملف {fid}:", reply_markup=kb)
-            except Exception as e:
-                print(f"Admin notify error: {e}")
-        try:
-            os.remove(temp_path)
-        except:
-            pass
-    except Exception as e:
-        print(f"Upload notify error: {e}")
 
 def pending_list(call, uid):
     files = DatabaseManager.get_files()
@@ -3057,142 +3154,223 @@ def pending_list(call, uid):
         return
     kb = types.InlineKeyboardMarkup(row_width=1)
     for fid, f in pending.items():
-        ft = "VIP" if f.get('type') == 'pro' else "مجاني"
-        kb.add(Utilities.create_button(f"{ft} {f.get('file_name', '?')[:25]}", f"vpend_{fid}", uid))
+        kb.add(Utilities.create_button(f"📄 {f.get('file_name', '?')[:20]}", f"vpend_{fid}", uid))
     kb.add(Utilities.create_button(Utilities.get_text(uid, 'back'), "nav_admin", uid))
-    text = Utilities.get_text(uid, 'pending_files') + f": {len(pending)}"
+    text = Utilities.get_text(uid, 'pending_count', count=len(pending))
     Utilities.edit_message(call, uid, Utilities.format_border(uid, 'pending_files', text), kb)
 
 def pending_view(call, fid, uid):
     files = DatabaseManager.get_files()
-    f = files.get(fid)
-    if not f:
-        bot.answer_callback_query(call.id, Utilities.get_text(uid, 'file_not_found'))
+    if fid not in files:
         return
+    f = files[fid]
     content = EncryptionManager.load_encrypted_file(fid)
-    preview = "❌ تعذر قراءة الملف"
+    preview = "🚫 ممنوع الوصول"
     if content:
         safe = escape(content[:1000])
         if len(safe) > 3000:
             safe = safe[:3000] + "\n..."
         preview = f"<pre><code class='language-python'>{safe}</code></pre>"
-    try:
-        uinfo = bot.get_chat(f['user_id'])
-        utext = f"{escape(uinfo.first_name)} (@{uinfo.username if uinfo.username else 'None'})"
-    except:
-        utext = f"🆔: {f['user_id']}"
     text = (Utilities.get_text(uid, 'file', name=f.get('file_name')) + '\n' +
-            Utilities.get_text(uid, 'file_owner', owner=utext) + '\n' +
-            Utilities.get_text(uid, 'user_id', id=f.get('user_id')) + '\n' +
+            Utilities.get_text(uid, 'file_owner', owner=f.get('user_id')) + '\n' +
             Utilities.get_text(uid, 'file_type', type='VIP' if f.get('type') == 'pro' else 'مجاني') + '\n' +
-            (Utilities.get_text(uid, 'duration', duration=str(f.get('hours', 0)) + ' ساعة') if f.get('type') == 'free' else '') + '\n' +
-            Utilities.get_text(uid, 'file_created', created=f.get('created_at')) + '\n\n👁️ المعاينة:\n' + preview)
+            Utilities.get_text(uid, 'file_created', created=f.get('created_at')) + '\n\n' + preview)
     kb = types.InlineKeyboardMarkup(row_width=2)
-    kb.add(
-        Utilities.create_button(Utilities.get_text(uid, 'approve'), f"approve_{fid}", uid),
-        Utilities.create_button(Utilities.get_text(uid, 'reject'), f"reject_{fid}", uid)
-    )
+    kb.add(Utilities.create_button(Utilities.get_text(uid, 'approve'), f"approve_{fid}", uid))
+    kb.add(Utilities.create_button(Utilities.get_text(uid, 'reject'), f"reject_{fid}", uid))
     kb.add(Utilities.create_button(Utilities.get_text(uid, 'back'), "adm_pending", uid))
-    try:
-        bot.delete_message(call.message.chat.id, call.message.message_id)
-    except:
-        pass
-    m = bot.send_message(call.message.chat.id, Utilities.format_border(uid, 'file_review', text[:4000]), parse_mode="HTML", reply_markup=kb)
-    Utilities.save_message(call.message.chat.id, m.message_id)
+    Utilities.edit_message(call, uid, Utilities.format_border(uid, 'file_review', text), kb)
 
 def approve_file(call, fid, uid):
     files = DatabaseManager.get_files()
     if fid not in files:
-        bot.answer_callback_query(call.id, Utilities.get_text(uid, 'file_not_found'))
         return
-    now = datetime.now()
     files[fid]['status'] = 'active'
-    files[fid]['started_at'] = now.strftime("%Y-%m-%d %H:%M:%S")
-    h_type = files[fid].get('type')
-    hours = files[fid].get('hours', 0)
-    user_id = files[fid]['user_id']
-    if h_type == 'free' and hours > 0:
-        users = DatabaseManager.get_users()
-        if str(user_id) in users:
-            users[str(user_id)]['points'] -= hours
-            DatabaseManager.save_users(users)
-            expires = now + timedelta(hours=hours)
-            files[fid]['expires_at'] = expires.strftime("%Y-%m-%d %H:%M:%S")
-            process_hours[fid] = hours
     DatabaseManager.save_files(files)
-    ProcessManager.start_script(fid)
+    user_id = files[fid]['user_id']
+    file_name = files[fid].get('file_name', '?')
+    duration = files[fid].get('duration', '?')
     try:
-        duration = str(hours) + ' ساعة' if h_type == 'free' else 'حتى انتهاء الاشتراك'
-        text = Utilities.get_text(user_id, 'file_approved', name=files[fid]['file_name'], duration=duration)
-        bot.send_message(user_id, Utilities.format_border(user_id, 'approved', text))
+        bot.send_message(user_id, Utilities.format_border(user_id, 'approved', Utilities.get_text(user_id, 'file_approved', name=file_name, duration=duration)))
     except:
         pass
+    ProcessManager.start_script(fid)
     bot.answer_callback_query(call.id, Utilities.get_text(uid, 'approved'))
     pending_list(call, uid)
 
 def reject_file(call, fid, uid):
     files = DatabaseManager.get_files()
     if fid not in files:
-        bot.answer_callback_query(call.id, Utilities.get_text(uid, 'file_not_found'))
         return
     user_id = files[fid]['user_id']
-    fname = files[fid]['file_name']
+    file_name = files[fid].get('file_name', '?')
     ProcessManager.cleanup_file(fid)
     del files[fid]
     DatabaseManager.save_files(files)
     try:
-        bot.send_message(user_id, Utilities.format_border(user_id, 'rejected', Utilities.get_text(user_id, 'file_rejected', name=fname)))
+        bot.send_message(user_id, Utilities.format_border(user_id, 'rejected', Utilities.get_text(user_id, 'file_rejected', name=file_name)))
     except:
         pass
     bot.answer_callback_query(call.id, Utilities.get_text(uid, 'rejected'))
     pending_list(call, uid)
 
-def file_panel(call, fid, uid):
-    if not Utilities.verify_file_access(fid, uid):
-        bot.answer_callback_query(call.id, Utilities.get_text(uid, 'access_denied'), show_alert=True)
+def broadcast_step(msg, prompt_id, uid):
+    if Utilities.is_cancelled(uid):
+        Utilities.clear_cancel(uid)
         return
+    Utilities.delete_messages(msg.chat.id, prompt_id, msg.message_id)
+    users = DatabaseManager.get_users()
+    success = 0
+    failed = 0
+    total = len(users)
+    for user_id in users:
+        try:
+            bot.copy_message(int(user_id), msg.chat.id, msg.message_id)
+            success += 1
+        except:
+            failed += 1
+    Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'success', Utilities.get_text(uid, 'broadcast_complete', success=success, failed=failed, total=total)), build_back_keyboard(uid, "nav_admin"))
+
+def channels_panel(call, uid):
+    settings = DatabaseManager.get_settings()
+    channels = settings.get('channels', [])
+    text = Utilities.get_text(uid, 'channels_list', count=len(channels)) + "\n\n"
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    kb.add(Utilities.create_button(Utilities.get_text(uid, 'add_channel'), "add_channel", uid))
+    for i, ch in enumerate(channels):
+        text += f"{i+1}. {ch['name']} ({ch['username']})\n"
+        kb.add(Utilities.create_button(f"❌ إزالة {ch['name'][:15]}", f"delch_{i}", uid))
+    kb.add(Utilities.create_button(Utilities.get_text(uid, 'back'), "nav_admin", uid))
+    Utilities.edit_message(call, uid, Utilities.format_border(uid, 'channels', text), kb)
+
+def add_channel_step(msg, prompt_id, uid):
+    if Utilities.is_cancelled(uid):
+        Utilities.clear_cancel(uid)
+        return
+    Utilities.delete_messages(msg.chat.id, prompt_id, msg.message_id)
+    if not msg.text or not msg.text.strip().startswith('@'):
+        Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'error', Utilities.get_text(uid, 'invalid_username')), build_back_keyboard(uid, "adm_channels"))
+        return
+    username = msg.text.strip()
+    try:
+        chat = bot.get_chat(username)
+        settings = DatabaseManager.get_settings()
+        channels = settings.get('channels', [])
+        channels.append({"username": username, "name": chat.title})
+        settings['channels'] = channels
+        DatabaseManager.save_settings(settings)
+        Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'success', Utilities.get_text(uid, 'channel_added', name=chat.title)), build_back_keyboard(uid, "adm_channels"))
+    except:
+        Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'error', Utilities.get_text(uid, 'channel_not_found')), build_back_keyboard(uid, "adm_channels"))
+
+def del_channel(call, idx, uid):
+    settings = DatabaseManager.get_settings()
+    channels = settings.get('channels', [])
+    if 0 <= idx < len(channels):
+        name = channels[idx]['name']
+        del channels[idx]
+        settings['channels'] = channels
+        DatabaseManager.save_settings(settings)
+        bot.answer_callback_query(call.id, Utilities.get_text(uid, 'channel_removed', name=name))
+    channels_panel(call, uid)
+
+def set_image_step(msg, prompt_id, uid):
+    if Utilities.is_cancelled(uid):
+        Utilities.clear_cancel(uid)
+        return
+    Utilities.delete_messages(msg.chat.id, prompt_id, msg.message_id)
+    if not msg.photo:
+        Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'error', Utilities.get_text(uid, 'invalid_file')), build_back_keyboard(uid, "adm_settings"))
+        return
+    finfo = bot.get_file(msg.photo[-1].file_id)
+    path = os.path.join(ASSETS_DIR, f"bot_image_{msg.message_id}.jpg")
+    with open(path, 'wb') as f:
+        f.write(bot.download_file(finfo.file_path))
+    settings = DatabaseManager.get_settings()
+    settings['bot_image'] = path
+    DatabaseManager.save_settings(settings)
+    Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'success', Utilities.get_text(uid, 'image_updated')), build_back_keyboard(uid, "adm_settings"))
+
+def set_thumb_step(msg, prompt_id, uid):
+    if Utilities.is_cancelled(uid):
+        Utilities.clear_cancel(uid)
+        return
+    Utilities.delete_messages(msg.chat.id, prompt_id, msg.message_id)
+    if not msg.photo:
+        Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'error', Utilities.get_text(uid, 'invalid_file')), build_back_keyboard(uid, "adm_settings"))
+        return
+    finfo = bot.get_file(msg.photo[-1].file_id)
+    path = os.path.join(THUMBS_DIR, f"thumb_{msg.message_id}.jpg")
+    with open(path, 'wb') as f:
+        f.write(bot.download_file(finfo.file_path))
+    settings = DatabaseManager.get_settings()
+    settings['file_thumb'] = path
+    DatabaseManager.save_settings(settings)
+    Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'success', Utilities.get_text(uid, 'thumb_updated')), build_back_keyboard(uid, "adm_settings"))
+
+def set_name_step(msg, prompt_id, uid):
+    if Utilities.is_cancelled(uid):
+        Utilities.clear_cancel(uid)
+        return
+    Utilities.delete_messages(msg.chat.id, prompt_id, msg.message_id)
+    if not msg.text:
+        Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'error', Utilities.get_text(uid, 'invalid_file')), build_back_keyboard(uid, "adm_settings"))
+        return
+    settings = DatabaseManager.get_settings()
+    settings['bot_name'] = msg.text.strip()
+    DatabaseManager.save_settings(settings)
+    Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'success', Utilities.get_text(uid, 'name_set', name=msg.text.strip())), build_back_keyboard(uid, "adm_settings"))
+
+def library_step(msg, prompt_id, uid):
+    if Utilities.is_cancelled(uid):
+        Utilities.clear_cancel(uid)
+        return
+    Utilities.delete_messages(msg.chat.id, prompt_id, msg.message_id)
+    if not msg.text:
+        Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'error', Utilities.get_text(uid, 'invalid_file')), build_back_keyboard(uid, "nav_main"))
+        return
+    lib_name = msg.text.strip()
+    pip_name = SmartInstaller.get_pip_name(lib_name)
+    if pip_name is None:
+        Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'success', f"📦 المكتبة '{lib_name}' مدمجة في بايثون ولا تحتاج تثبيت."), build_back_keyboard(uid, "nav_main"))
+        return
+    try:
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "--quiet", pip_name], timeout=180)
+        Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'success', Utilities.get_text(uid, 'library_installed', lib=lib_name)), build_back_keyboard(uid, "nav_main"))
+    except subprocess.TimeoutExpired:
+        Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'error', Utilities.get_text(uid, 'library_timeout', lib=lib_name)), build_back_keyboard(uid, "nav_main"))
+    except:
+        Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'error', Utilities.get_text(uid, 'library_failed', lib=lib_name)), build_back_keyboard(uid, "nav_main"))
+
+def file_panel(call, fid, uid):
     files = DatabaseManager.get_files()
     if fid not in files:
-        bot.answer_callback_query(call.id, Utilities.get_text(uid, 'file_not_found'))
+        bot.answer_callback_query(call.id, Utilities.get_text(uid, 'file_not_found'), show_alert=True)
         return
     f = files[fid]
-    content = EncryptionManager.load_encrypted_file(fid)
-    preview = "❌ تعذر قراءة الملف"
-    if content:
-        safe = escape(content[:1000])
-        if len(safe) > 3000:
-            safe = safe[:3000] + "\n..."
-        preview = f"<pre><code class='language-python'>{safe}</code></pre>"
+    if f.get('user_id') != uid and not Utilities.is_admin(uid):
+        bot.answer_callback_query(call.id, Utilities.get_text(uid, 'access_denied'), show_alert=True)
+        return
     running = fid in active_processes and active_processes[fid].poll() is None
-    hrs = "غير محدود"
-    if f.get('type') == 'free':
+    status = Utilities.get_text(uid, 'running') if running else Utilities.get_text(uid, 'stopped')
+    remaining = "غير محدود"
+    if f.get('type') != 'pro':
         expires_at = f.get('expires_at')
         if expires_at:
             try:
-                exp_time = datetime.strptime(expires_at, "%Y-%m-%d %H:%M:%S")
-                remaining = exp_time - datetime.now()
-                if remaining.total_seconds() > 0:
-                    hrs = f"{remaining.days} يوم {remaining.seconds // 3600} ساعة"
+                exp = datetime.strptime(expires_at, "%Y-%m-%d %H:%M:%S")
+                rem = exp - datetime.now()
+                if rem.total_seconds() <= 0:
+                    remaining = Utilities.get_text(uid, 'time_expired_short')
                 else:
-                    hrs = Utilities.get_text(uid, 'time_expired_short')
+                    remaining = f"{rem.days} يوم {rem.seconds // 3600} ساعة"
             except:
-                hrs = "غير معروف"
-        elif fid in process_hours:
-            hrs = f"{process_hours[fid]} ساعة"
-
-    stop_reasons = DatabaseManager.get_stop_reasons()
-    reason_text = ""
-    admin_stop_text = ""
-    if files[fid].get('admin_stopped', False):
-        admin_stop_text = "\n🔴 ⚠️ البوت موقوف من الإدارة"
-    if fid in stop_reasons:
-        reason_text = f"\n🛑 السبب: {stop_reasons[fid].get('reason', 'غير معروف')}"
-
-    text = (Utilities.get_text(uid, 'file', name=f.get('file_name')) + '\n' +
-            Utilities.get_text(uid, 'file_type', type='VIP' if f.get('type') == 'pro' else 'مجاني') + '\n' +
-            Utilities.get_text(uid, 'file_status', status=Utilities.get_text(uid, 'running') if running else Utilities.get_text(uid, 'stopped')) + '\n' +
-            Utilities.get_text(uid, 'file_remaining', remaining=hrs) + '\n' +
-            Utilities.get_text(uid, 'file_created', created=f.get('created_at')) + reason_text + admin_stop_text + '\n\n👁️ المعاينة:\n' + preview)
+                remaining = "غير معروف"
+    ft = "VIP" if f.get('type') == 'pro' else "مجاني"
+    text = (Utilities.get_text(uid, 'file_status', status=status) + '\n' +
+            Utilities.get_text(uid, 'file_remaining', remaining=remaining) + '\n' +
+            Utilities.get_text(uid, 'file_type', type=ft) + '\n' +
+            Utilities.get_text(uid, 'file_created', created=f.get('created_at')))
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.add(
         Utilities.create_button(Utilities.get_text(uid, 'stop') if running else Utilities.get_text(uid, 'start'), f"toggle_{fid}", uid),
@@ -3203,26 +3381,35 @@ def file_panel(call, fid, uid):
         Utilities.create_button(Utilities.get_text(uid, 'token_info'), f"tokinfo_{fid}", uid)
     )
     kb.add(
-        Utilities.create_button(Utilities.get_text(uid, 'delete'), f"delc_{fid}", uid),
-        Utilities.create_button(Utilities.get_text(uid, 'preview_code'), f"preview_{fid}", uid)
+        Utilities.create_button(Utilities.get_text(uid, 'preview_code'), f"preview_{fid}", uid),
+        Utilities.create_button(Utilities.get_text(uid, 'extend_time'), f"extend_{fid}", uid)
     )
-    if f.get('type') == 'free':
-        kb.add(Utilities.create_button(Utilities.get_text(uid, 'extend_time_btn'), f"extend_{fid}", uid))
+    kb.add(Utilities.create_button(Utilities.get_text(uid, 'delete'), f"delc_{fid}", uid))
     kb.add(Utilities.create_button(Utilities.get_text(uid, 'back'), "nav_files", uid))
     Utilities.edit_message(call, uid, Utilities.format_border(uid, 'file_manager', text), kb)
 
-def toggle_file(call, fid, uid):
-    if not Utilities.verify_file_access(fid, uid):
-        bot.answer_callback_query(call.id, Utilities.get_text(uid, 'access_denied'), show_alert=True)
-        return
+def preview_code(call, fid, uid):
     files = DatabaseManager.get_files()
     if fid not in files:
-        bot.answer_callback_query(call.id, Utilities.get_text(uid, 'file_not_found'))
+        bot.answer_callback_query(call.id, Utilities.get_text(uid, 'file_not_found'), show_alert=True)
         return
-    if files[fid].get('admin_stopped', False) and not Utilities.is_admin(uid):
-        stop_reasons = DatabaseManager.get_stop_reasons()
-        reason = stop_reasons.get(fid, {}).get('reason', 'غير معروف')
-        bot.answer_callback_query(call.id, f"🛑 البوت موقوف من الإدارة!\n📋 السبب: {reason}", show_alert=True)
+    content = EncryptionManager.load_encrypted_file(fid)
+    if not content:
+        bot.answer_callback_query(call.id, Utilities.get_text(uid, 'file_not_found'), show_alert=True)
+        return
+    safe = escape(content[:3000])
+    if len(safe) > 3000:
+        safe = safe[:3000] + "\n..."
+    preview = f"<pre><code class='language-python'>{safe}</code></pre>"
+    kb = types.InlineKeyboardMarkup()
+    kb.add(Utilities.create_button(Utilities.get_text(uid, 'back'), f"manage_{fid}", uid))
+    Utilities.edit_message(call, uid, Utilities.format_border(uid, 'preview_code', preview), kb)
+
+def toggle_file(call, fid, uid):
+    files = DatabaseManager.get_files()
+    if fid not in files:
+        return
+    if files[fid].get('user_id') != uid and not Utilities.is_admin(uid):
         return
     running = fid in active_processes and active_processes[fid].poll() is None
     if running:
@@ -3236,24 +3423,24 @@ def toggle_file(call, fid, uid):
     file_panel(call, fid, uid)
 
 def delete_file(call, fid, uid):
-    if not Utilities.verify_file_access(fid, uid):
-        bot.answer_callback_query(call.id, Utilities.get_text(uid, 'access_denied'), show_alert=True)
-        return
     files = DatabaseManager.get_files()
-    if fid in files:
-        fname = files[fid].get('file_name', '?')
-        ProcessManager.cleanup_file(fid)
-        del files[fid]
-        DatabaseManager.save_files(files)
-        bot.answer_callback_query(call.id, Utilities.get_text(uid, 'deleted', name=fname))
+    if fid not in files:
+        return
+    if files[fid].get('user_id') != uid and not Utilities.is_admin(uid):
+        return
+    fname = files[fid].get('file_name', '?')
+    ProcessManager.cleanup_file(fid)
+    del files[fid]
+    DatabaseManager.save_files(files)
+    bot.answer_callback_query(call.id, Utilities.get_text(uid, 'deleted', name=fname))
+    files = DatabaseManager.get_files()
     u_files = {fid: f for fid, f in files.items() if f.get('user_id') == uid and f.get('status') == 'active'}
     if not u_files:
-        kb = types.InlineKeyboardMarkup()
-        kb.add(
-            Utilities.create_button(Utilities.get_text(uid, 'upload'), "nav_upload", uid),
-            Utilities.create_button(Utilities.get_text(uid, 'back'), "nav_main", uid)
-        )
-        Utilities.edit_message(call, uid, Utilities.format_border(uid, 'my_files_title', Utilities.get_text(uid, 'no_files')), kb)
+        u = users.get(str(uid), {})
+        vip = Utilities.is_user_pro(uid)
+        rank = 'VIP' if vip else 'مجاني'
+        text = Utilities.get_text(uid, 'main_menu_rank', rank=rank) + '\n' + Utilities.get_text(uid, 'main_menu_points', points=u.get('points', 0))
+        Utilities.edit_message(call, uid, Utilities.format_border(uid, 'main_menu_title', text), build_main_keyboard(uid))
     else:
         kb = types.InlineKeyboardMarkup(row_width=1)
         for fid, f in u_files.items():
@@ -3262,56 +3449,25 @@ def delete_file(call, fid, uid):
             ft = "VIP" if f.get('type') == 'pro' else "مجاني"
             kb.add(Utilities.create_button(f"{icon} {ft} {f.get('file_name', '?')[:25]}", f"manage_{fid}", uid))
         kb.add(Utilities.create_button(Utilities.get_text(uid, 'back'), "nav_main", uid))
-        Utilities.edit_message(call, uid, Utilities.format_border(uid, 'my_files_title', Utilities.get_text(uid, 'files_count', count=len(u_files))), kb)
-
-def download_file(call, fid, uid):
-    if not Utilities.verify_file_access(fid, uid):
-        bot.answer_callback_query(call.id, Utilities.get_text(uid, 'access_denied'), show_alert=True)
-        return
-    files = DatabaseManager.get_files()
-    if fid not in files:
-        bot.answer_callback_query(call.id, Utilities.get_text(uid, 'file_not_found'))
-        return
-    content = EncryptionManager.load_encrypted_file(fid)
-    if not content:
-        bot.answer_callback_query(call.id, Utilities.get_text(uid, 'download_failed'), show_alert=True)
-        return
-    try:
-        original_name = files[fid].get('file_name', f'{fid}.py')
-        temp_path = os.path.join(TEMP_DIR, original_name)
-        with open(temp_path, 'w', encoding='utf-8') as f:
-            f.write(content)
-        thumb = Utilities.get_thumb()
-        with open(temp_path, 'rb') as f:
-            if thumb:
-                with open(thumb, 'rb') as t:
-                    bot.send_document(call.message.chat.id, f, thumb=t, caption=f"📄 {original_name}", parse_mode="HTML")
-            else:
-                bot.send_document(call.message.chat.id, f, caption=f"📄 {original_name}", parse_mode="HTML")
-        os.remove(temp_path)
-        bot.answer_callback_query(call.id, Utilities.get_text(uid, 'downloaded'))
-    except Exception as e:
-        print(f"Download error: {e}")
-        bot.answer_callback_query(call.id, Utilities.get_text(uid, 'download_failed'), show_alert=True)
+        running_count = sum(1 for fid in u_files if fid in active_processes and active_processes[fid].poll() is None)
+        text = (Utilities.get_text(uid, 'files_count', count=len(u_files)) + '\n' +
+                Utilities.get_text(uid, 'running_count', count=running_count) + '\n' +
+                Utilities.get_text(uid, 'stopped_count', count=len(u_files) - running_count))
+        Utilities.edit_message(call, uid, Utilities.format_border(uid, 'my_files_title', text), kb)
 
 def terminal(call, fid, uid):
-    if not Utilities.verify_file_access(fid, uid):
-        bot.answer_callback_query(call.id, Utilities.get_text(uid, 'access_denied'), show_alert=True)
-        return
     files = DatabaseManager.get_files()
     if fid not in files:
-        bot.answer_callback_query(call.id, Utilities.get_text(uid, 'file_not_found'))
+        return
+    if files[fid].get('user_id') != uid and not Utilities.is_admin(uid):
         return
     running = fid in active_processes and active_processes[fid].poll() is None
-    output = Utilities.get_logs(fid, 40)
-    text = Utilities.get_text(uid, 'terminal_output', name=files[fid]['file_name'],
-                             status=Utilities.get_text(uid, 'running') if running else Utilities.get_text(uid, 'stopped'),
-                             output=output)
+    status = Utilities.get_text(uid, 'running') if running else Utilities.get_text(uid, 'stopped')
+    output = Utilities.get_logs(fid)
+    text = Utilities.get_text(uid, 'terminal_output', name=files[fid].get('file_name', '?'), status=status, output=output)
     kb = types.InlineKeyboardMarkup(row_width=2)
-    kb.add(
-        Utilities.create_button(Utilities.get_text(uid, 'refresh'), f"rterm_{fid}", uid),
-        Utilities.create_button(Utilities.get_text(uid, 'input'), f"inp_{fid}", uid)
-    )
+    kb.add(Utilities.create_button(Utilities.get_text(uid, 'refresh'), f"rterm_{fid}", uid))
+    kb.add(Utilities.create_button(Utilities.get_text(uid, 'input'), f"inp_{fid}", uid))
     kb.add(Utilities.create_button(Utilities.get_text(uid, 'back'), f"manage_{fid}", uid))
     Utilities.edit_message(call, uid, Utilities.format_border(uid, 'terminal_title', text), kb)
 
@@ -3322,11 +3478,21 @@ def input_step(msg, fid, prompt_id, uid):
     Utilities.delete_messages(msg.chat.id, prompt_id, msg.message_id)
     if not msg.text:
         return
-    if ProcessManager.write_stdin(fid, msg.text):
-        text = Utilities.get_text(uid, 'input_sent', cmd=escape(msg.text))
+    cmd = msg.text.strip()
+    if ProcessManager.write_stdin(fid, cmd):
+        time.sleep(0.5)
+        output = Utilities.get_logs(fid)
+        files = DatabaseManager.get_files()
+        running = fid in active_processes and active_processes[fid].poll() is None
+        status = Utilities.get_text(uid, 'running') if running else Utilities.get_text(uid, 'stopped')
+        text = Utilities.get_text(uid, 'terminal_output', name=files[fid].get('file_name', '?'), status=status, output=output)
+        kb = types.InlineKeyboardMarkup(row_width=2)
+        kb.add(Utilities.create_button(Utilities.get_text(uid, 'refresh'), f"rterm_{fid}", uid))
+        kb.add(Utilities.create_button(Utilities.get_text(uid, 'input'), f"inp_{fid}", uid))
+        kb.add(Utilities.create_button(Utilities.get_text(uid, 'back'), f"manage_{fid}", uid))
+        Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'terminal_title', text), kb)
     else:
-        text = Utilities.get_text(uid, 'process_not_running')
-    Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'input', text), build_back_keyboard(uid, f"term_{fid}"))
+        Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'error', Utilities.get_text(uid, 'process_not_running')), build_back_keyboard(uid, f"manage_{fid}"))
 
 def token_step(msg, fid, prompt_id, uid):
     if Utilities.is_cancelled(uid):
@@ -3335,55 +3501,38 @@ def token_step(msg, fid, prompt_id, uid):
     Utilities.delete_messages(msg.chat.id, prompt_id, msg.message_id)
     if not msg.text:
         return
-    token = msg.text.strip()
+    new_token = msg.text.strip()
     content = EncryptionManager.load_encrypted_file(fid)
     if not content:
         Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'error', Utilities.get_text(uid, 'file_not_found')), build_back_keyboard(uid, f"manage_{fid}"))
         return
-    updated_content = Utilities.update_token_in_memory(content, token)
-    if updated_content:
-        files = DatabaseManager.get_files()
-        if fid in files:
-            user_id = files[fid].get('user_id')
-            if EncryptionManager.save_encrypted_file(fid, updated_content, user_id):
-                Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'success', Utilities.get_text(uid, 'token_updated')), build_back_keyboard(uid, f"manage_{fid}"))
-            else:
-                Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'error', Utilities.get_text(uid, 'save_failed')), build_back_keyboard(uid, f"manage_{fid}"))
-        else:
-            Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'error', Utilities.get_text(uid, 'file_not_found')), build_back_keyboard(uid, f"manage_{fid}"))
+    new_content = Utilities.update_token_in_memory(content, new_token)
+    if not new_content:
+        Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'error', Utilities.get_text(uid, 'token_failed')), build_back_keyboard(uid, f"manage_{fid}"))
+        return
+    if EncryptionManager.save_encrypted_file(fid, new_content, uid):
+        Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'success', Utilities.get_text(uid, 'token_updated')), build_back_keyboard(uid, f"manage_{fid}"))
     else:
         Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'error', Utilities.get_text(uid, 'token_failed')), build_back_keyboard(uid, f"manage_{fid}"))
 
 def token_info(call, fid, uid):
-    if not Utilities.verify_file_access(fid, uid):
-        bot.answer_callback_query(call.id, Utilities.get_text(uid, 'access_denied'), show_alert=True)
-        return
     content = EncryptionManager.load_encrypted_file(fid)
     if not content:
-        bot.answer_callback_query(call.id, Utilities.get_text(uid, 'file_not_found'), show_alert=True)
+        bot.answer_callback_query(call.id, Utilities.get_text(uid, 'no_token'), show_alert=True)
         return
-    try:
-        tokens = re.findall(r"(\d{8,12}:[a-zA-Z0-9_-]{35,})", content)
-        if not tokens:
-            bot.answer_callback_query(call.id, Utilities.get_text(uid, 'no_token'), show_alert=True)
-            return
-        token = tokens[0]
+    match = re.search(r'["\']?(\d{8,12}:[a-zA-Z0-9_-]{35,})["\']?', content)
+    if match:
+        token = match.group(1)
         valid, info = Utilities.check_token(token)
         if valid:
-            text = Utilities.get_text(uid, 'token_valid') + '\n\n' + \
-                   f"🤖 اسم البوت: {escape(info.get('first_name'))}\n👤 المستخدم: @{info.get('username')}\n🆔 المعرف: <code>{info.get('id')}</code>"
+            text = f"✅ {Utilities.get_text(uid, 'token_valid')}\n\n🤖 الاسم: {info.get('first_name', '?')}\n👤 المعرف: @{info.get('username', '?')}\n🆔 ID: <code>{info.get('id', '?')}</code>"
         else:
-            text = Utilities.get_text(uid, 'token_invalid') + '\n\n' + escape(str(info))
-        kb = types.InlineKeyboardMarkup()
-        kb.add(Utilities.create_button(Utilities.get_text(uid, 'back'), f"manage_{fid}", uid))
-        try:
-            bot.delete_message(call.message.chat.id, call.message.message_id)
-        except:
-            pass
-        m = bot.send_message(call.message.chat.id, Utilities.format_border(uid, 'token_info', text), parse_mode="HTML", reply_markup=kb)
-        Utilities.save_message(call.message.chat.id, m.message_id)
-    except:
-        bot.answer_callback_query(call.id, Utilities.get_text(uid, 'error'), show_alert=True)
+            text = f"❌ {Utilities.get_text(uid, 'token_invalid')}\n\n⚠️ {info}"
+    else:
+        text = Utilities.get_text(uid, 'no_token')
+    kb = types.InlineKeyboardMarkup()
+    kb.add(Utilities.create_button(Utilities.get_text(uid, 'back'), f"manage_{fid}", uid))
+    Utilities.edit_message(call, uid, Utilities.format_border(uid, 'token_info', text), kb)
 
 def extend_step(msg, fid, prompt_id, uid):
     if Utilities.is_cancelled(uid):
@@ -3396,237 +3545,86 @@ def extend_step(msg, fid, prompt_id, uid):
     hours = int(msg.text.strip())
     success, message = Utilities.extend_file_time(fid, hours, uid)
     if success:
-        Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'success', Utilities.get_text(uid, 'extend_success', message=message)), build_back_keyboard(uid, f"manage_{fid}"))
+        Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'success', Utilities.get_text(uid, 'file_extended', hours=hours)), build_back_keyboard(uid, f"manage_{fid}"))
     else:
         Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'error', Utilities.get_text(uid, 'extend_failed', message=message)), build_back_keyboard(uid, f"manage_{fid}"))
 
-def preview_code(call, fid, uid):
-    if not Utilities.verify_file_access(fid, uid):
+def download_file(call, fid, uid):
+    if not Utilities.is_admin(uid):
         bot.answer_callback_query(call.id, Utilities.get_text(uid, 'access_denied'), show_alert=True)
         return
     content = EncryptionManager.load_encrypted_file(fid)
     if not content:
         bot.answer_callback_query(call.id, Utilities.get_text(uid, 'file_not_found'), show_alert=True)
         return
-    safe = escape(content[:3000])
-    if len(safe) > 3000:
-        safe = safe[:3000] + "\n..."
-    text = f"👁️ معاينة الكود:\n\n<pre><code class='language-python'>{safe}</code></pre>"
-    kb = types.InlineKeyboardMarkup()
-    kb.add(Utilities.create_button(Utilities.get_text(uid, 'back'), f"manage_{fid}", uid))
+    files = DatabaseManager.get_files()
+    fname = files.get(fid, {}).get('file_name', f'{fid}.py')
+    temp_path = os.path.join(TEMP_DIR, fname)
+    with open(temp_path, 'w', encoding='utf-8') as f:
+        f.write(content)
     try:
-        bot.delete_message(call.message.chat.id, call.message.message_id)
+        thumb = Utilities.get_thumb()
+        with open(temp_path, 'rb') as f:
+            if thumb:
+                with open(thumb, 'rb') as t:
+                    bot.send_document(uid, f, thumb=t, caption=f"📄 {fname}", parse_mode="HTML")
+            else:
+                bot.send_document(uid, f, caption=f"📄 {fname}", parse_mode="HTML")
+        bot.answer_callback_query(call.id, Utilities.get_text(uid, 'downloaded'))
     except:
-        pass
-    m = bot.send_message(call.message.chat.id, Utilities.format_border(uid, 'preview_code', text), parse_mode="HTML", reply_markup=kb)
-    Utilities.save_message(call.message.chat.id, m.message_id)
-
-def library_step(msg, prompt_id, uid):
-    if Utilities.is_cancelled(uid):
-        Utilities.clear_cancel(uid)
-        return
-    Utilities.delete_messages(msg.chat.id, prompt_id, msg.message_id)
-    if not msg.text:
-        return
-    lib = msg.text.strip()
-    m = bot.send_message(msg.chat.id, Utilities.format_border(uid, 'library_install', Utilities.get_text(uid, 'library_install', lib=escape(lib))))
-    Utilities.save_message(msg.chat.id, m.message_id)
-    try:
-        subprocess.check_call([sys.executable, "-m", "pip", "install", lib], timeout=120)
-        text = Utilities.get_text(uid, 'library_installed', lib=escape(lib))
-    except subprocess.TimeoutExpired:
-        text = Utilities.get_text(uid, 'library_timeout', lib=escape(lib))
-    except:
-        text = Utilities.get_text(uid, 'library_failed', lib=escape(lib))
-    bot.edit_message_text(Utilities.format_border(uid, 'library_install', text), msg.chat.id, m.message_id, parse_mode="HTML", reply_markup=build_back_keyboard(uid))
-
-def broadcast_step(msg, prompt_id, uid):
-    if Utilities.is_cancelled(uid):
-        Utilities.clear_cancel(uid)
-        return
-    Utilities.delete_messages(msg.chat.id, prompt_id, msg.message_id)
-    users = DatabaseManager.get_users()
-    uids = list(users.keys())
-    success, failed = 0, 0
-    wait = bot.send_message(msg.chat.id, Utilities.format_border(uid, 'broadcast', Utilities.get_text(uid, 'broadcast_sending', count=len(uids))))
-    Utilities.save_message(msg.chat.id, wait.message_id)
-    for user_id in uids:
+        bot.answer_callback_query(call.id, Utilities.get_text(uid, 'download_failed'), show_alert=True)
+    finally:
         try:
-            if msg.content_type == 'text':
-                bot.send_message(int(user_id), msg.text, parse_mode="HTML")
-            elif msg.content_type == 'photo':
-                bot.send_photo(int(user_id), msg.photo[-1].file_id, caption=msg.caption, parse_mode="HTML")
-            elif msg.content_type == 'document':
-                bot.send_document(int(user_id), msg.document.file_id, caption=msg.caption, parse_mode="HTML")
-            success += 1
-            time.sleep(0.05)
-        except Exception as e:
-            failed += 1
-    text = Utilities.get_text(uid, 'broadcast_complete', success=success, failed=failed, total=len(uids))
-    bot.edit_message_text(Utilities.format_border(uid, 'broadcast', text), msg.chat.id, wait.message_id, parse_mode="HTML", reply_markup=build_back_keyboard(uid, "nav_admin"))
+            os.remove(temp_path)
+        except:
+            pass
 
-def channels_panel(call, uid):
-    settings = DatabaseManager.get_settings()
-    channels = settings.get('channels', [])
-    kb = types.InlineKeyboardMarkup(row_width=1)
-    kb.add(Utilities.create_button(Utilities.get_text(uid, 'add_channel'), "add_channel", uid))
-    for i, ch in enumerate(channels):
-        kb.add(Utilities.create_button(f"❌ إزالة {ch['name']}", f"delch_{i}", uid))
+def stop_bot_admin_step(msg, fid, prompt_id, uid):
+    if Utilities.is_cancelled(uid):
+        Utilities.clear_cancel(uid)
+        return
+    Utilities.delete_messages(msg.chat.id, prompt_id, msg.message_id)
+    reason = msg.text.strip() if msg.text else "غير محدد"
+    files = DatabaseManager.get_files()
+    if fid in files:
+        files[fid]['admin_stopped'] = True
+        DatabaseManager.save_files(files)
+        ProcessManager.stop_script(fid, reason)
+        stop_reasons = DatabaseManager.get_stop_reasons()
+        stop_reasons[fid] = {
+            'reason': reason,
+            'time': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            'stopped_by': uid
+        }
+        DatabaseManager.save_stop_reasons(stop_reasons)
+        user_id = files[fid]['user_id']
+        try:
+            bot.send_message(user_id, Utilities.format_border(user_id, 'stopped_by_admin', f"🛑 تم إيقاف البوت من قبل الإدارة.\n📋 السبب: {reason}"))
+        except:
+            pass
+        Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'success', Utilities.get_text(uid, 'bot_stopped_admin', reason=reason)), build_back_keyboard(uid, "adm_files"))
+
+def show_system_usage(call, uid):
+    cpu = psutil.cpu_percent(interval=1)
+    mem = psutil.virtual_memory()
+    ram_percent = mem.percent
+    ram_mb = mem.used / (1024 * 1024)
+    total_mb = mem.total / (1024 * 1024)
+    active = sum(1 for p in active_processes.values() if p.poll() is None)
+    paused = len(paused_bots)
+    text = Utilities.get_text(uid, 'system_usage_current', cpu=round(cpu, 1), ram=round(ram_percent, 1), ram_mb=round(ram_mb, 1), used_mb=round(ram_mb, 1), total_mb=round(total_mb, 1), active=active, paused=paused)
+    kb = types.InlineKeyboardMarkup()
+    kb.add(Utilities.create_button(Utilities.get_text(uid, 'refresh'), "adm_system_usage", uid))
     kb.add(Utilities.create_button(Utilities.get_text(uid, 'back'), "nav_admin", uid))
-    text = Utilities.get_text(uid, 'channels_list', count=len(channels))
-    if channels:
-        text += "\n\n" + "\n".join([f"📢 {ch['name']} ({ch['username']})" for ch in channels])
-    Utilities.edit_message(call, uid, Utilities.format_border(uid, 'channels', text), kb)
+    Utilities.edit_message(call, uid, Utilities.format_border(uid, 'view_system_usage', text), kb)
 
-def add_channel_step(msg, prompt_id, uid):
-    if Utilities.is_cancelled(uid):
-        Utilities.clear_cancel(uid)
-        return
-    Utilities.delete_messages(msg.chat.id, prompt_id, msg.message_id)
-    if not msg.text:
-        return
-    username = msg.text.strip()
-    if not username.startswith('@'):
-        Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'error', Utilities.get_text(uid, 'invalid_username')), build_back_keyboard(uid, "adm_channels"))
-        return
-    try:
-        chat = bot.get_chat(username)
-        settings = DatabaseManager.get_settings()
-        settings['channels'] = settings.get('channels', []) + [{"username": username, "name": chat.title}]
-        DatabaseManager.save_settings(settings)
-        Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'success', Utilities.get_text(uid, 'channel_added', name=chat.title)), build_back_keyboard(uid, "adm_channels"))
-    except:
-        Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'error', Utilities.get_text(uid, 'channel_not_found')), build_back_keyboard(uid, "adm_channels"))
-
-def del_channel(call, index, uid):
-    settings = DatabaseManager.get_settings()
-    try:
-        channels = settings.get('channels', [])
-        if 0 <= index < len(channels):
-            name = channels[index]['name']
-            del channels[index]
-            settings['channels'] = channels
-            DatabaseManager.save_settings(settings)
-            bot.answer_callback_query(call.id, Utilities.get_text(uid, 'channel_removed', name=name))
-        channels_panel(call, uid)
-    except:
-        bot.answer_callback_query(call.id, Utilities.get_text(uid, 'error'))
-
-def set_name_step(msg, prompt_id, uid):
-    if Utilities.is_cancelled(uid):
-        Utilities.clear_cancel(uid)
-        return
-    Utilities.delete_messages(msg.chat.id, prompt_id, msg.message_id)
-    if not msg.text:
-        return
-    settings = DatabaseManager.get_settings()
-    settings['bot_name'] = msg.text.strip()
-    DatabaseManager.save_settings(settings)
-    Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'success', Utilities.get_text(uid, 'name_set', name=msg.text.strip())), build_back_keyboard(uid, "adm_settings"))
-
-def set_image_step(msg, prompt_id, uid):
-    if Utilities.is_cancelled(uid):
-        Utilities.clear_cancel(uid)
-        return
-    Utilities.delete_messages(msg.chat.id, prompt_id, msg.message_id)
-    if not msg.photo:
-        Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'error', Utilities.get_text(uid, 'send_image')), build_back_keyboard(uid, "adm_settings"))
-        return
-    try:
-        fid = msg.photo[-1].file_id
-        settings = DatabaseManager.get_settings()
-        settings['bot_image'] = fid
-        DatabaseManager.save_settings(settings)
-        Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'success', Utilities.get_text(uid, 'image_updated')), build_back_keyboard(uid, "adm_settings"))
-    except:
-        Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'error', Utilities.get_text(uid, 'failed')), build_back_keyboard(uid, "adm_settings"))
-
-def set_thumb_step(msg, prompt_id, uid):
-    if Utilities.is_cancelled(uid):
-        Utilities.clear_cancel(uid)
-        return
-    Utilities.delete_messages(msg.chat.id, prompt_id, msg.message_id)
-    if not msg.photo:
-        Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'error', Utilities.get_text(uid, 'send_image')), build_back_keyboard(uid, "adm_settings"))
-        return
-    try:
-        finfo = bot.get_file(msg.photo[-1].file_id)
-        path = os.path.join(THUMBS_DIR, "thumb.jpg")
-        with open(path, "wb") as f:
-            f.write(bot.download_file(finfo.file_path))
-        settings = DatabaseManager.get_settings()
-        settings['file_thumb'] = path
-        DatabaseManager.save_settings(settings)
-        Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'success', Utilities.get_text(uid, 'thumb_updated')), build_back_keyboard(uid, "adm_settings"))
-    except:
-        Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'error', Utilities.get_text(uid, 'failed')), build_back_keyboard(uid, "adm_settings"))
-
-
-# ─── نظام أكواد الهدايا ───
-def gift_codes_panel(call, uid):
-    codes = DatabaseManager.get_gift_codes()
-    text = f"🎫 نظام أكواد الهدايا\n\n📊 عدد الأكواد: {len(codes)}\n\nالأكواد النشطة:\n"
-    for code, info in codes.items():
-        status = "🟢" if info.get('active', True) else "🔴"
-        uses = f"{info['used_count']}/{info['max_uses']}" if info['max_uses'] != -1 else f"{info['used_count']}/∞"
-        text += f"{status} <code>{code}</code> | {info['reward_type']} | {uses}\n"
-    kb = types.InlineKeyboardMarkup(row_width=1)
-    kb.add(Utilities.create_button("➕ إنشاء كود جديد", "create_gift_code", uid))
-    for code in list(codes.keys())[:10]:
-        kb.add(Utilities.create_button(f"🗑️ حذف {code[:15]}", f"delgiftcode_{code}", uid))
-    kb.add(Utilities.create_button(Utilities.get_text(uid, 'back'), "nav_admin", uid))
-    Utilities.edit_message(call, uid, Utilities.format_border(uid, 'gift_codes_admin', text), kb)
-
-def create_gift_code_step(msg, prompt_id, uid):
-    if Utilities.is_cancelled(uid):
-        Utilities.clear_cancel(uid)
-        return
-    Utilities.delete_messages(msg.chat.id, prompt_id, msg.message_id)
-    parts = msg.text.strip().split()
-    if len(parts) < 3:
-        Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'error', "❌ الصيغة: CODE TYPE VALUE [USES] [DAYS]"), build_back_keyboard(uid, "adm_gift_codes"))
-        return
-    code = parts[0].upper()
-    reward_type = parts[1]
-    reward_value = int(parts[2]) if parts[2].isdigit() else 0
-    max_uses = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 1
-    expires_days = int(parts[4]) if len(parts) > 4 and parts[4].isdigit() else None
-    success, msg_text = GiftCodeManager.create_code(code, reward_type, reward_value, max_uses, expires_days)
-    if success:
-        type_str = "نقاط" if reward_type == 'points' else "أيام VIP" if reward_type == 'vip_days' else "VIP مدى الحياة"
-        text = Utilities.get_text(uid, 'code_created', code=code, type=type_str, value=reward_value, uses=max_uses)
-        Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'success', text), build_back_keyboard(uid, "adm_gift_codes"))
-    else:
-        Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'error', msg_text), build_back_keyboard(uid, "adm_gift_codes"))
-
-def redeem_code_step(msg, prompt_id, uid):
-    if Utilities.is_cancelled(uid):
-        Utilities.clear_cancel(uid)
-        return
-    Utilities.delete_messages(msg.chat.id, prompt_id, msg.message_id)
-    if not msg.text:
-        return
-    code = msg.text.strip().upper()
-    success, result = GiftCodeManager.redeem_code(code, uid)
-    if success:
-        reward_text = ""
-        if result == 'points':
-            reward_text = "نقاط"
-        elif result == 'vip_days':
-            reward_text = "أيام VIP"
-        elif result == 'vip_lifetime':
-            reward_text = "VIP مدى الحياة"
-        Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'success', Utilities.get_text(uid, 'gift_code_redeemed', reward=reward_text)), build_back_keyboard(uid, "nav_wallet"))
-    else:
-        Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'error', result), build_back_keyboard(uid, "nav_wallet"))
-
-# ─── ميزات الأدمن الجديدة ───
 def gifts_panel(call, uid):
-    text = "🎁 نظام الهدايا والمكافآت\n\nاختر نوع الهدية:"
+    users = DatabaseManager.get_users()
+    text = f"🎁 {Utilities.get_text(uid, 'gifts_title')}\n\n👥 إجمالي المستخدمين: {len(users)}"
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.add(
-        Utilities.create_button("🎁 هدية للجميع", "gift_all", uid),
-        Utilities.create_button("🎁 هدية لمستخدم", "gift_user", uid)
+        Utilities.create_button(Utilities.get_text(uid, 'send_gift_all'), "gift_all", uid),
+        Utilities.create_button(Utilities.get_text(uid, 'send_gift_user'), "gift_user", uid)
     )
     kb.add(Utilities.create_button(Utilities.get_text(uid, 'back'), "nav_admin", uid))
     Utilities.edit_message(call, uid, Utilities.format_border(uid, 'gifts_title', text), kb)
@@ -3645,11 +3643,11 @@ def gift_all_step(msg, prompt_id, uid):
     for user_id in users:
         try:
             users[user_id]['points'] = users[user_id].get('points', 0) + points
-            count += 1
             try:
-                bot.send_message(int(user_id), Utilities.format_border(int(user_id), 'user_gift_notify', f"🎁 لقد تلقيت هدية!\n💰 <b>{points}</b> نقاط من الإدارة."))
+                bot.send_message(int(user_id), Utilities.format_border(int(user_id), 'user_gift_notify', f"🎁 لقد تلقيت هدية!\n💎 <b>{points}</b> نقاط من الإدارة."))
             except:
                 pass
+            count += 1
         except:
             pass
     DatabaseManager.save_users(users)
@@ -3662,234 +3660,223 @@ def gift_user_step(msg, prompt_id, uid):
     Utilities.delete_messages(msg.chat.id, prompt_id, msg.message_id)
     parts = msg.text.strip().split()
     if len(parts) != 2 or not parts[0].isdigit() or not parts[1].isdigit():
-        Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'error', "❌ يرجى إدخال: معرف_المستخدم النقاط"), build_back_keyboard(uid, "adm_gifts"))
+        Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'error', "❌ يرجى إدخال معرف المستخدم ثم النقاط."), build_back_keyboard(uid, "adm_gifts"))
         return
-    target_id = int(parts[0])
+    tuid = int(parts[0])
     points = int(parts[1])
     users = DatabaseManager.get_users()
-    if str(target_id) not in users:
+    if str(tuid) in users:
+        users[str(tuid)]['points'] = users[str(tuid)].get('points', 0) + points
+        DatabaseManager.save_users(users)
+        try:
+            bot.send_message(tuid, Utilities.format_border(tuid, 'user_gift_notify', f"🎁 لقد تلقيت هدية!\n💎 <b>{points}</b> نقاط من الإدارة."))
+        except:
+            pass
+        Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'success', Utilities.get_text(uid, 'gift_sent_user', points=points)), build_back_keyboard(uid, "adm_gifts"))
+    else:
         Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'error', Utilities.get_text(uid, 'invalid_user_id')), build_back_keyboard(uid, "adm_gifts"))
-        return
-    users[str(target_id)]['points'] = users[str(target_id)].get('points', 0) + points
-    DatabaseManager.save_users(users)
-    try:
-        bot.send_message(target_id, Utilities.format_border(target_id, 'user_gift_notify', f"🎁 لقد تلقيت هدية!\n💰 <b>{points}</b> نقاط من الإدارة."))
-    except:
-        pass
-    Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'success', Utilities.get_text(uid, 'gift_sent_user', points=points)), build_back_keyboard(uid, "adm_gifts"))
 
-def show_system_usage(call, uid):
-    try:
-        cpu = psutil.cpu_percent(interval=1)
-        mem = psutil.virtual_memory()
-        ram_percent = mem.percent
-        ram_mb = mem.used / (1024 * 1024)
-        total_mb = mem.total / (1024 * 1024)
-        active_count = sum(1 for fid in active_processes if active_processes[fid].poll() is None)
-        paused_count = len(paused_bots)
-        text = Utilities.get_text(uid, 'system_usage_current', cpu=cpu, ram=round(ram_percent, 1), ram_mb=round(ram_mb, 1), used_mb=round(ram_mb, 1), total_mb=round(total_mb, 1), active=active_count, paused=paused_count)
-        kb = types.InlineKeyboardMarkup()
-        kb.add(Utilities.create_button("🔄 تحديث", "adm_system_usage", uid))
-        kb.add(Utilities.create_button(Utilities.get_text(uid, 'back'), "nav_admin", uid))
-        Utilities.edit_message(call, uid, Utilities.format_border(uid, 'view_system_usage', text), kb)
-    except Exception as e:
-        bot.answer_callback_query(call.id, f"❌ خطأ: {str(e)[:100]}", show_alert=True)
 
-def stop_bot_admin_step(msg, fid, prompt_id, uid):
+# ─── نظام أكواد الهدايا ───
+def gift_codes_panel(call, uid):
+    codes = DatabaseManager.get_gift_codes()
+    text = f"🎫 {Utilities.get_text(uid, 'gift_codes_admin')}\n\n📊 إجمالي الأكواد: {len(codes)}"
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    kb.add(Utilities.create_button(Utilities.get_text(uid, 'create_code'), "create_gift_code", uid))
+    for code, info in codes.items():
+        used = info.get('used_count', 0)
+        max_uses = info.get('max_uses', 1)
+        status = "✅" if info.get('active', True) else "❌"
+        kb.add(Utilities.create_button(f"{status} {code[:15]} ({used}/{max_uses})", f"delgiftcode_{code}", uid))
+    kb.add(Utilities.create_button(Utilities.get_text(uid, 'back'), "nav_admin", uid))
+    Utilities.edit_message(call, uid, Utilities.format_border(uid, 'gift_codes_admin', text), kb)
+
+def create_gift_code_step(msg, prompt_id, uid):
     if Utilities.is_cancelled(uid):
         Utilities.clear_cancel(uid)
         return
     Utilities.delete_messages(msg.chat.id, prompt_id, msg.message_id)
-    reason = msg.text.strip() if msg.text else "تم الإيقاف من قبل الإدارة"
-    files = DatabaseManager.get_files()
-    if fid in files:
-        user_id = files[fid]['user_id']
-        files[fid]['admin_stopped'] = True
-        DatabaseManager.save_files(files)
-        ProcessManager.stop_script(fid, reason)
-        try:
-            bot.send_message(user_id, Utilities.format_border(user_id, 'stopped_by_admin', Utilities.get_text(user_id, 'stopped_by_admin', reason=reason)))
-        except:
-            pass
-        Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'success', Utilities.get_text(uid, 'bot_stopped_admin', reason=reason)), build_back_keyboard(uid, "adm_files"))
+    parts = msg.text.strip().split()
+    if len(parts) < 3:
+        Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'error', "❌ يرجى إدخال: الكود النوع القيمة [الاستخدامات]"), build_back_keyboard(uid, "adm_gift_codes"))
+        return
+    code = parts[0]
+    reward_type = parts[1]
+    reward_value = parts[2]
+    max_uses = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 1
+    if reward_type not in ['points', 'vip_days', 'vip_lifetime']:
+        Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'error', "❌ النوع يجب أن يكون: points, vip_days, أو vip_lifetime"), build_back_keyboard(uid, "adm_gift_codes"))
+        return
+    try:
+        reward_value = int(reward_value) if reward_type != 'vip_lifetime' else 0
+    except:
+        Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'error', "❌ القيمة يجب أن تكون رقم صحيح"), build_back_keyboard(uid, "adm_gift_codes"))
+        return
+    success, message = GiftCodeManager.create_code(code, reward_type, reward_value, max_uses)
+    if success:
+        Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'success', Utilities.get_text(uid, 'code_created', code=code, type=reward_type, value=reward_value, uses=max_uses)), build_back_keyboard(uid, "adm_gift_codes"))
     else:
-        Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'error', Utilities.get_text(uid, 'file_not_found')), build_back_keyboard(uid, "adm_files"))
+        Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'error', message), build_back_keyboard(uid, "adm_gift_codes"))
 
-# ─── مراقبة الموارد الذكية ───
-def resource_monitoring():
-    ram_alert_sent = False
-    while True:
+def redeem_code_step(msg, prompt_id, uid):
+    if Utilities.is_cancelled(uid):
+        Utilities.clear_cancel(uid)
+        return
+    Utilities.delete_messages(msg.chat.id, prompt_id, msg.message_id)
+    if not msg.text:
+        return
+    code = msg.text.strip().upper()
+    success, result = GiftCodeManager.redeem_code(code, uid)
+    if success:
+        if result == 'points':
+            reward_text = "نقاط"
+        elif result == 'vip_days':
+            reward_text = "أيام VIP"
+        else:
+            reward_text = "VIP مدى الحياة"
+        Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'success', Utilities.get_text(uid, 'gift_code_redeemed', reward=reward_text)), build_back_keyboard(uid, "nav_wallet"))
+    else:
+        Utilities.send_message(msg.chat.id, uid, Utilities.format_border(uid, 'error', result), build_back_keyboard(uid, "nav_wallet"))
+
+# ─── مراقبة الموارد والبوتات ───
+class ResourceMonitor:
+    @staticmethod
+    def check_all():
         try:
-            for fid in list(active_processes.keys()):
-                usage = ProcessManager.get_resource_usage(fid)
-                if usage:
-                    if usage['cpu'] > RESOURCE_LIMITS['max_cpu_percent'] or usage['memory'] > RESOURCE_LIMITS['max_memory_mb']:
-                        files = DatabaseManager.get_files()
-                        if fid in files:
-                            user_id = files[fid]['user_id']
-                            ProcessManager.stop_script(fid, "تجاوز حدود الموارد")
-                            try:
-                                bot.send_message(user_id, Utilities.format_border(user_id, 'resource_limit_notify', f"⚠️ تم إيقاف البوت '{files[fid]['file_name']}' بسبب تجاوز حدود الموارد."))
-                            except:
-                                pass
-                            for adm in DatabaseManager.get_admins():
-                                try:
-                                    bot.send_message(adm, f"⚠️ بوت {files[fid]['file_name']} (مستخدم: {user_id}) توقف بسبب استهلاك عالٍ.\n🖥️ CPU: {usage['cpu']}%\n💾 الذاكرة: {usage['memory']:.2f} ميجابايت")
-                                except:
-                                    pass
-
             mem = psutil.virtual_memory()
             ram_percent = mem.percent
 
-            if ram_percent >= RESOURCE_LIMITS['ram_pause_threshold'] and not ram_alert_sent:
+            # فصل البوتات عند 90% RAM
+            if ram_percent >= RESOURCE_LIMITS['ram_pause_threshold']:
                 for fid in list(active_processes.keys()):
-                    ProcessManager.pause_bot(fid, "ضغط على موارد السيرفر")
-                ram_alert_sent = True
+                    if fid not in paused_bots:
+                        ProcessManager.pause_bot(fid, f"ضغط السيرفر - RAM {ram_percent}%")
+                        files = DatabaseManager.get_files()
+                        if fid in files:
+                            user_id = files[fid]['user_id']
+                            try:
+                                bot.send_message(user_id, Utilities.format_border(user_id, 'bot_paused', "⏸️ البوت متوقف مؤقتاً بسبب ضغط السيرفر."))
+                            except:
+                                pass
+                # تنبيه الأدمن
                 for adm in DatabaseManager.get_admins():
                     try:
-                        bot.send_message(adm, Utilities.format_border(adm, 'ram_alert', f"⚠️ تنبيه! استهلاك الرام وصل إلى {ram_percent}%\n⏸️ تم إيقاف جميع البوتات مؤقتاً."))
+                        bot.send_message(adm, Utilities.get_text(adm, 'ram_alert', ram=round(ram_percent, 1)))
                     except:
                         pass
-            elif ram_percent <= RESOURCE_LIMITS['ram_resume_threshold'] and ram_alert_sent:
-                files = DatabaseManager.get_files()
+                return
+
+            # استئناف البوتات عند 80% RAM
+            if ram_percent <= RESOURCE_LIMITS['ram_resume_threshold'] and paused_bots:
                 for fid in list(paused_bots):
+                    ProcessManager.resume_bot(fid)
+                    files = DatabaseManager.get_files()
                     if fid in files:
-                        ProcessManager.resume_bot(fid)
-                ram_alert_sent = False
-                for adm in DatabaseManager.get_admins():
-                    try:
-                        bot.send_message(adm, Utilities.format_border(adm, 'ram_normal', f"✅ استهلاك الرام عاد للطبيعي ({ram_percent}%).\n▶️ تم استئناف البوتات."))
-                    except:
-                        pass
-
-            Utilities.cleanup_temp_files()
-            Utilities.cleanup_old_logs()
-        except:
-            pass
-        time.sleep(60)
-
-# ─── حلقة المراقبة ───
-def monitoring_loop():
-    while True:
-        try:
-            files = DatabaseManager.get_files()
-
-            for fid in list(active_processes.keys()):
-                proc = active_processes.get(fid)
-                if not proc or proc.poll() is not None:
-                    if fid in active_processes:
-                        del active_processes[fid]
-                    continue
-
-                if fid not in files:
-                    ProcessManager.stop_script(fid, "الملف محذوف")
-                    continue
-
-                uid = str(files[fid]['user_id'])
-
-                if not Utilities.check_subscription(int(uid)):
-                    ProcessManager.stop_script(fid, "عدم الاشتراك في القنوات")
-                    try:
-                        bot.send_message(int(uid), Utilities.format_border(int(uid), 'stopped', Utilities.get_text(int(uid), 'stopped_subscription_notify', name=files[fid]['file_name'])))
-                    except:
-                        pass
-                    continue
-
-                # فحص انتهاء الوقت للمجاني
-                if not Utilities.is_user_pro(int(uid)) and files[fid].get('type') == 'free':
-                    expires_at = files[fid].get('expires_at')
-                    if expires_at:
+                        user_id = files[fid]['user_id']
                         try:
-                            exp_time = datetime.strptime(expires_at, "%Y-%m-%d %H:%M:%S")
-                            if datetime.now() >= exp_time:
-                                fname = files[fid].get('file_name', '?')
-                                ProcessManager.cleanup_file(fid)
-                                del files[fid]
-                                DatabaseManager.save_files(files)
-                                try:
-                                    bot.send_message(int(uid), Utilities.format_border(int(uid), 'time_expired', Utilities.get_text(int(uid), 'time_expired_notify', name=fname)))
-                                except:
-                                    pass
-                                for adm in DatabaseManager.get_admins():
-                                    try:
-                                        bot.send_message(adm, f"⏱️ بوت {fname} للمستخدم {uid} انتهى وقتها وتم الحذف التلقائي.")
-                                    except:
-                                        pass
+                            bot.send_message(user_id, Utilities.format_border(user_id, 'bot_resumed', "▶️ تم استئناف البوت."))
                         except:
                             pass
-                    elif fid in process_hours:
-                        process_hours[fid] -= 1
-                        if process_hours[fid] <= 0:
-                            fname = files[fid].get('file_name', '?')
+                # تنبيه الأدمن
+                for adm in DatabaseManager.get_admins():
+                    try:
+                        bot.send_message(adm, Utilities.get_text(adm, 'ram_normal', ram=round(ram_percent, 1)))
+                    except:
+                        pass
+
+            # فحص انتهاء الوقت
+            files = DatabaseManager.get_files()
+            now = datetime.now()
+            for fid, f in list(files.items()):
+                if f.get('type') == 'free' and f.get('expires_at'):
+                    try:
+                        exp = datetime.strptime(f['expires_at'], "%Y-%m-%d %H:%M:%S")
+                        if now >= exp:
                             ProcessManager.cleanup_file(fid)
                             del files[fid]
                             DatabaseManager.save_files(files)
                             try:
-                                bot.send_message(int(uid), Utilities.format_border(int(uid), 'time_expired', Utilities.get_text(int(uid), 'time_expired_notify', name=fname)))
+                                bot.send_message(f['user_id'], Utilities.format_border(f['user_id'], 'file_deleted_auto', f"⏱️ تم حذف البوت '{f.get('file_name', '?')}' تلقائياً بسبب انتهاء الوقت."))
                             except:
                                 pass
-
-                # فحص انتهاء VIP
-                if files[fid].get('type') == 'pro' and not Utilities.is_user_pro(int(uid)):
-                    fname = files[fid].get('file_name', '?')
-                    ProcessManager.cleanup_file(fid)
-                    del files[fid]
-                    DatabaseManager.save_files(files)
-                    try:
-                        bot.send_message(int(uid), Utilities.format_border(int(uid), 'vip_expired_stop', f"⏱️ انتهى اشتراك VIP. تم إيقاف وحذف البوت '{fname}'."))
                     except:
                         pass
-                    for adm in DatabaseManager.get_admins():
+
+                # فحص انتهاء VIP
+                if f.get('type') == 'pro':
+                    users = DatabaseManager.get_users()
+                    u = users.get(str(f['user_id']), {})
+                    exp = u.get('expiry')
+                    if exp and exp not in [None, 'null', 'LIFETIME', 0]:
                         try:
-                            bot.send_message(adm, f"⏱️ بوت VIP {fname} للمستخدم {uid} انتهى اشتراكه وتم الحذف.")
+                            exp_date = datetime.strptime(exp, "%Y-%m-%d %H:%M:%S")
+                            if now >= exp_date:
+                                ProcessManager.cleanup_file(fid)
+                                del files[fid]
+                                DatabaseManager.save_files(files)
+                                users[str(f['user_id'])]['expiry'] = None
+                                DatabaseManager.save_users(users)
+                                try:
+                                    bot.send_message(f['user_id'], Utilities.format_border(f['user_id'], 'vip_expired_stop', "⏱️ انتهى اشتراك VIP. تم إيقاف البوت."))
+                                except:
+                                    pass
                         except:
                             pass
 
-            # تنظيف العمليات اليتيمة
-            for proc in psutil.process_iter(['pid', 'cmdline']):
-                try:
-                    cmdline = proc.info.get('cmdline', []) or []
-                    cmd_str = ' '.join(str(c) for c in cmdline)
-                    if ENV_DIR in cmd_str and 'python' in cmd_str.lower():
-                        found = False
-                        for fid in files:
-                            env_file = os.path.join(ENV_DIR, fid, f"{fid}.py")
-                            if env_file in cmd_str:
-                                found = True
-                                break
-                        if not found:
-                            proc.kill()
-                except:
-                    pass
+            # فحص الاشتراك
+            for fid, f in list(files.items()):
+                if not Utilities.check_subscription(f['user_id']):
+                    ProcessManager.stop_script(fid, "عدم الاشتراك")
+                    try:
+                        bot.send_message(f['user_id'], Utilities.format_border(f['user_id'], 'stopped_subscription_notify', f"🔴 تم إيقاف البوت '{f.get('file_name', '?')}' بسبب عدم الاشتراك."))
+                    except:
+                        pass
 
+            # فحص الموارد لكل بوت
+            for fid in list(active_processes.keys()):
+                usage = ProcessManager.get_resource_usage(fid)
+                if usage and usage['memory'] > RESOURCE_LIMITS['max_memory_mb']:
+                    ProcessManager.stop_script(fid, "تجاوز حدود الذاكرة")
+                    files = DatabaseManager.get_files()
+                    if fid in files:
+                        try:
+                            bot.send_message(files[fid]['user_id'], Utilities.format_border(files[fid]['user_id'], 'resource_limit_notify', f"⚠️ تم إيقاف البوت '{files[fid].get('file_name', '?')}' بسبب تجاوز حدود الموارد."))
+                        except:
+                            pass
         except Exception as e:
-            print(f"Monitoring error: {e}")
-        time.sleep(60)
+            print(f"Resource monitor error: {e}")
 
-def keep_alive():
-    links = ["https://www.google.com", "https://www.bing.com", "https://www.wikipedia.org"]
+def monitor_loop():
     while True:
         try:
-            requests.get(random.choice(links), timeout=15)
-            time.sleep(random.randint(120, 240))
-        except:
-            time.sleep(60)
+            ResourceMonitor.check_all()
+            Utilities.cleanup_old_logs()
+        except Exception as e:
+            print(f"Monitor loop error: {e}")
+        time.sleep(60)
 
-threading.Thread(target=resource_monitoring, daemon=True).start()
-threading.Thread(target=monitoring_loop, daemon=True).start()
-threading.Thread(target=keep_alive, daemon=True).start()
+# ─── التشغيل الرئيسي ───
+def main():
+    init_database()
+    # إنشاء ملفات قاعدة البيانات إذا لم تكن موجودة
+    for db_file in [USERS_DB, FILES_DB, SETTINGS_DB, STORE_DB, ADMINS_DB, MARKET_DB, SECURITY_DB, GIFTS_DB, STOP_REASONS_DB, INSTALLED_LIBS_DB, GIFT_CODES_DB, BANNED_PATTERNS_DB, UPLOAD_LOGS_DB]:
+        if not os.path.exists(db_file):
+            write_json(db_file, {})
 
-init_database()
+    threading.Thread(target=monitor_loop, daemon=True).start()
 
-print("=" * 50)
-print("🤖 بوت الاستضافة الاحترافي | REDMOOD")
-print("📡 t.me/REDMOOD")
-print("📢 t.me/PRO_APK_MOOD")
-print("=" * 50)
+    print("🤖 REDMOOD HOSTING BOT v3.0 Started!")
+    print(f"📡 Admin ID: {ADMIN_ID}")
+    print(f"🛡️ Security System: Active")
+    print(f"🎁 Gift Code System: Active")
+    print(f"📊 Resource Monitor: Active")
 
-while True:
     try:
-        bot.infinity_polling(timeout=60, long_polling_timeout=60)
+        bot.polling(none_stop=True, timeout=60, long_polling_timeout=60)
     except Exception as e:
-        print(f"Polling error: {e}")
+        print(f"Bot crashed: {e}")
         time.sleep(5)
+        main()
+
+if __name__ == '__main__':
+    main()
