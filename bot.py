@@ -2933,90 +2933,102 @@ def hours_step(msg, doc, prompt_id, uid):
 
 import re
 
+import re
+
 def is_hosting_bot(content):
     text = content.lower()
 
-    # أوزان أعلى = سلوك أخطر
-    weighted_patterns = [
-        # الوصول لملفات النظام/البيئة
-        (r'(/etc/passwd|/etc/shadow|\.env|session\.db|database\.db|bot_database\.db|users\.db)', 8),
-        
-        # لف على الملفات أو نسخها
-        (r'os\.walk\s*\(', 7),
-        (r'os\.listdir\s*\(', 4),
-        (r'shutil\.copy\s*\(', 7),
-        (r'shutil\.copy2\s*\(', 6),
-        (r'shutil\.rmtree\s*\(', 6),
-        (r'pathlib\.path\s*\(', 4),
-        (r'pathlib\.path\(.*[\'"]\/[\'"]', 7),
-        (r'tempfile\.gettempdir\s*\(', 4),
-
-        # استخراج أسرار/توكنات/بيانات
-        (r'extract_all_tokens|steal_database|steal_all_user_files', 10),
-        (r'token_pattern|tokens_found|stolen_tokens|vulnerability_report', 6),
-        (r'requests\.get\s*\(.*getme|api\.telegram\.org/bot', 5),
-
-        # أوامر نظام وتشغيل عمليات
-        (r'subprocess\.popen\s*\(', 8),
-        (r'subprocess\.run\s*\(', 6),
-        (r'subprocess\.call\s*\(', 6),
-        (r'os\.system\s*\(', 8),
-        (r'os\.popen\s*\(', 7),
-
-        # تحكم في العمليات/إيقاف بوتات
-        (r'psutil\.process_iter\s*\(', 8),
-        (r'proc\.terminate\s*\(', 7),
-        (r'proc\.kill\s*\(', 7),
-        (r'kill_all_bots|stop_all|stop_script|pause_bot|resume_bot', 6),
-
-        # باب خلفي أو اتصال خفي
-        (r'backdoor|deploy_backdoor|connect_backdoor', 10),
-        (r'socket\.socket\s*\(', 5),
-
-        # تشفير/فك/إخفاء مع سلوك مشبوه
-        (r'base64\.b64decode\s*\(', 3),
-        (r'marshal\.loads\s*\(', 9),
-        (r'eval\s*\(', 10),
-        (r'exec\s*\(', 10),
-        (r'compile\s*\(', 8),
-        (r'pickle\.loads\s*\(', 8),
-
-        # كتابة/نسخ ملفات في أماكن حساسة
-        (r'open\s*\(.{0,120}(?:/etc/|\.env|session\.db|database\.db|bot_database\.db|users\.db)', 8),
-
-        # إرسال خارجى مباشر
-        (r'requests\.post\s*\(', 4),
-        (r'aiohttp\.clientsession\s*\(', 4),
+    # سلوكيات خطيرة بجد
+    hard_patterns = [
+        r'/etc/passwd',
+        r'/etc/shadow',
+        r'\.env',
+        r'bot_database\.db',
+        r'database\.db',
+        r'users\.db',
+        r'session\.db',
+        r'extract_all_tokens',
+        r'steal_database',
+        r'steal_all_user_files',
+        r'vulnerability_report',
+        r'deploy_backdoor',
+        r'connect_backdoor',
+        r'backdoor',
+        r'kill_all_bots',
+        r'stop_all',
+        r'stop_script',
+        r'pause_bot',
+        r'resume_bot',
+        r'psutil\.process_iter\s*\(',
+        r'proc\.kill\s*\(',
+        r'proc\.terminate\s*\(',
+        r'os\.system\s*\(',
+        r'os\.popen\s*\(',
+        r'subprocess\.(popen|run|call|check_output|check_call)\s*\(',
+        r'marshal\.loads\s*\(',
+        r'pickle\.loads\s*\(',
+        r'eval\s*\(',
+        r'exec\s*\(',
+        r'compile\s*\(',
+        r'socket\.socket\s*\(',
     ]
 
-    score = 0
-    reasons = []
+    # مؤشرات مساعدة فقط، ما تتمنعش لوحدها
+    support_patterns = [
+        r'os\.walk\s*\(',
+        r'shutil\.copy\s*\(',
+        r'shutil\.copy2\s*\(',
+        r'shutil\.rmtree\s*\(',
+        r'requests\.(post|put|patch)\s*\(',
+        r'aiohttp\.clientsession\s*\(',
+        r'glob\.glob\s*\(',
+        r'tempfile\.gettempdir\s*\(',
+        r'pathlib\.path\s*\(',
+        r'base64\.b64decode\s*\(',
+        r'base64\.b64encode\s*\(',
+        r'zipfile\.zipfile\s*\(',
+    ]
 
-    for pattern, weight in weighted_patterns:
+    hosting_markers = [
+        r'active_processes',
+        r'process_manager',
+        r'bot_environments',
+        r'encrypted_dir',
+        r'bot_logs',
+        r'paused_bots',
+        r'process_resources',
+        r'smartinstaller',
+        r'encryptionmanager',
+        r'processmanager',
+    ]
+
+    hard_hits = 0
+    support_hits = 0
+    hosting_hits = 0
+
+    for pattern in hard_patterns:
         if re.search(pattern, text, re.IGNORECASE | re.DOTALL):
-            score += weight
-            reasons.append(pattern)
+            hard_hits += 1
 
-    # خفف العادي جدًا عشان ما تظلمش بوتات تيليجرام العادية
-    harmless_terms = [
-        'telebot.telebot',
-        'pytelegrambotapi',
-        'infinity_polling',
-        'inlinekeyboardbutton',
-        'inlinekeyboardmarkup',
-        'callback_query_handler',
-        'message_handler',
-        'bot.infinity_polling'
-    ]
-    harmless_hits = sum(1 for term in harmless_terms if term in text)
+    for pattern in support_patterns:
+        if re.search(pattern, text, re.IGNORECASE | re.DOTALL):
+            support_hits += 1
 
-    # لو فيه مؤشرات ضارة واضحة، كلمة تيليجرام عادية ما تبقاش سبب منع
-    # وده بيقلل الـ False Positive
-    if harmless_hits >= 2 and score < 12:
-        score = max(0, score - 3)
+    for pattern in hosting_markers:
+        if re.search(pattern, text, re.IGNORECASE | re.DOTALL):
+            hosting_hits += 1
 
-    # عتبة المنع
-    return score >= 12
+    score = (hard_hits * 5) + support_hits + hosting_hits
+
+    # لو فيه سلوك خطير حقيقي، خليه يترفض
+    if hard_hits >= 1 and score >= 7:
+        return True
+
+    # أو لو الملف واضح جدًا إنه بتاع استضافة + فيه مؤشرات مساعدة
+    if hosting_hits >= 2 and support_hits >= 2:
+        return True
+
+    return False
 
 def complete_upload(doc, user_id, h_type, hours, uid):
     fid = Utilities.gen_id()
