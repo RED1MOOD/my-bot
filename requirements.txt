@@ -1,2 +1,11 @@
-requests
-numpy
+python-telegram-bot[job-queue]==20.7
+moviepy==1.0.3
+Pillow==10.2.0
+requests==2.31.0
+python-dotenv==1.0.0
+arabic-reshaper==3.0.0
+python-bidi==0.4.2
+numpy==1.26.3
+imageio==2.33.1
+imageio-ffmpeg==0.4.9
+setuptools==68.2.2
