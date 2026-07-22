@@ -1,0 +1,15 @@
+[Unit]
+Description=Quran Video Generator Bot
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/quran_video_generator
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/root/quran_video_generator/venv/bin/python main.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
